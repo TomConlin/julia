@@ -25,6 +25,7 @@ export
     @fetchfrom,
     @everywhere,
     @parallel,
+    @parallelLT,
 
     addprocs,
     CachingPool,
