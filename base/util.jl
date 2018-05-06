@@ -1,17 +1,5 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-# timing
-
-# time() in libc.jl
-
-# high-resolution relative time, in nanoseconds
-
-"""
-    time_ns()
-
-Get the time in nanoseconds. The time corresponding to 0 is undefined, and wraps every 5.8 years.
-"""
-time_ns() = ccall(:jl_hrtime, UInt64, ())
 
 # This type must be kept in sync with the C struct in src/gc.h
 struct GC_Num
@@ -99,36 +87,35 @@ end
 function format_bytes(bytes)
     bytes, mb = prettyprint_getunits(bytes, length(_mem_units), Int64(1024))
     if mb == 1
-        @sprintf("%d %s%s", bytes, _mem_units[mb], bytes==1 ? "" : "s")
+        Printf.@sprintf("%d %s%s", bytes, _mem_units[mb], bytes==1 ? "" : "s")
     else
-        @sprintf("%.3f %s", bytes, _mem_units[mb])
+        Printf.@sprintf("%.3f %s", bytes, _mem_units[mb])
     end
 end
 
-function time_print(elapsedtime, bytes, gctime, allocs)
-    @printf("%10.6f seconds", elapsedtime/1e9)
+function time_print(elapsedtime, bytes=0, gctime=0, allocs=0)
+    Printf.@printf("%10.6f seconds", elapsedtime/1e9)
     if bytes != 0 || allocs != 0
         allocs, ma = prettyprint_getunits(allocs, length(_cnt_units), Int64(1000))
         if ma == 1
-            @printf(" (%d%s allocation%s: ", allocs, _cnt_units[ma], allocs==1 ? "" : "s")
+            Printf.@printf(" (%d%s allocation%s: ", allocs, _cnt_units[ma], allocs==1 ? "" : "s")
         else
-            @printf(" (%.2f%s allocations: ", allocs, _cnt_units[ma])
+            Printf.@printf(" (%.2f%s allocations: ", allocs, _cnt_units[ma])
         end
         print(format_bytes(bytes))
         if gctime > 0
-            @printf(", %.2f%% gc time", 100*gctime/elapsedtime)
+            Printf.@printf(", %.2f%% gc time", 100*gctime/elapsedtime)
         end
         print(")")
     elseif gctime > 0
-        @printf(", %.2f%% gc time", 100*gctime/elapsedtime)
+        Printf.@printf(", %.2f%% gc time", 100*gctime/elapsedtime)
     end
-    println()
 end
 
 function timev_print(elapsedtime, diff::GC_Diff)
     allocs = gc_alloc_count(diff)
     time_print(elapsedtime, diff.allocd, diff.total_time, allocs)
-    print("elapsed time (ns): $elapsedtime\n")
+    print("\nelapsed time (ns): $elapsedtime\n")
     padded_nonzero_print(diff.total_time,   "gc time (ns)")
     padded_nonzero_print(diff.allocd,       "bytes allocated")
     padded_nonzero_print(diff.poolalloc,    "pool allocs")
@@ -171,6 +158,7 @@ macro time(ex)
         local diff = GC_Diff(gc_num(), stats)
         time_print(elapsedtime, diff.allocd, diff.total_time,
                    gc_alloc_count(diff))
+        println()
         val
     end
 end
@@ -288,16 +276,7 @@ julia> gctime
 0.0055765
 
 julia> fieldnames(typeof(memallocs))
-9-element Array{Symbol,1}:
- :allocd
- :malloc
- :realloc
- :poolalloc
- :bigalloc
- :freecall
- :total_time
- :pause
- :full_sweep
+(:allocd, :malloc, :realloc, :poolalloc, :bigalloc, :freecall, :total_time, :pause, :full_sweep)
 
 julia> memallocs.total_time
 5576500
@@ -319,217 +298,45 @@ end
 
 function with_output_color(f::Function, color::Union{Int, Symbol}, io::IO, args...; bold::Bool = false)
     buf = IOBuffer()
-    have_color && bold && print(buf, text_colors[:bold])
-    have_color && print(buf, get(text_colors, color, color_normal))
+    iscolor = get(io, :color, false)
     try f(IOContext(buf, io), args...)
     finally
-        have_color && color != :nothing && print(buf, get(disable_text_style, color, text_colors[:default]))
-        have_color && (bold || color == :bold) && print(buf, disable_text_style[:bold])
-        print(io, String(take!(buf)))
+        str = String(take!(buf))
+        if !iscolor
+            print(io, str)
+        else
+            bold && color == :bold && (color = :nothing)
+            enable_ansi  = get(text_colors, color, text_colors[:default]) *
+                               (bold ? text_colors[:bold] : "")
+            disable_ansi = (bold ? disable_text_style[:bold] : "") *
+                               get(disable_text_style, color, text_colors[:default])
+            first = true
+            for line in split(str, '\n')
+                first || print(buf, '\n')
+                first = false
+                isempty(line) && continue
+                print(buf, enable_ansi, line, disable_ansi)
+            end
+            print(io, String(take!(buf)))
+        end
     end
 end
 
 """
-    print_with_color(color::Union{Symbol, Int}, [io], xs...; bold::Bool = false)
+    printstyled([io], xs...; bold::Bool=false, color::Union{Symbol,Int}=:normal)
 
-Print `xs` in a color specified as a symbol.
+Print `xs` in a color specified as a symbol or integer, optionally in bold.
 
 `color` may take any of the values $(Base.available_text_colors_docstring)
 or an integer between 0 and 255 inclusive. Note that not all terminals support 256 colors.
 If the keyword `bold` is given as `true`, the result will be printed in bold.
 """
-print_with_color(color::Union{Int, Symbol}, io::IO, msg...; bold::Bool = false) =
-    with_output_color(print, color, io, msg...; bold = bold)
-print_with_color(color::Union{Int, Symbol}, msg...; bold::Bool = false) =
-    print_with_color(color, STDOUT, msg...; bold = bold)
-println_with_color(color::Union{Int, Symbol}, io::IO, msg...; bold::Bool = false) =
-    with_output_color(println, color, io, msg...; bold = bold)
-println_with_color(color::Union{Int, Symbol}, msg...; bold::Bool = false) =
-    println_with_color(color, STDOUT, msg...; bold = bold)
+printstyled(io::IO, msg...; bold::Bool=false, color::Union{Int,Symbol}=:normal) =
+    with_output_color(print, color, io, msg...; bold=bold)
+printstyled(msg...; bold::Bool=false, color::Union{Int,Symbol}=:normal) =
+    printstyled(stdout, msg...; bold=bold, color=color)
 
-## warnings and messages ##
-
-const log_info_to = Dict{Tuple{Union{Module,Void},Union{Symbol,Void}},IO}()
-const log_warn_to = Dict{Tuple{Union{Module,Void},Union{Symbol,Void}},IO}()
-const log_error_to = Dict{Tuple{Union{Module,Void},Union{Symbol,Void}},IO}()
-
-function _redirect(io::IO, log_to::Dict, sf::StackTraces.StackFrame)
-    (sf.linfo isa Core.MethodInstance) || return io
-    mod = sf.linfo.def
-    isa(mod, Method) && (mod = mod.module)
-    fun = sf.func
-    if haskey(log_to, (mod,fun))
-        return log_to[(mod,fun)]
-    elseif haskey(log_to, (mod,nothing))
-        return log_to[(mod,nothing)]
-    elseif haskey(log_to, (nothing,nothing))
-        return log_to[(nothing,nothing)]
-    else
-        return io
-    end
-end
-
-function _redirect(io::IO, log_to::Dict, fun::Symbol)
-    clos = string("#",fun,"#")
-    kw = string("kw##",fun)
-    local sf
-    break_next_frame = false
-    for trace in backtrace()
-        stack::Vector{StackFrame} = StackTraces.lookup(trace)
-        filter!(frame -> !frame.from_c, stack)
-        for frame in stack
-            (frame.linfo isa Core.MethodInstance) || continue
-            sf = frame
-            break_next_frame && (@goto skip)
-            mod = frame.linfo.def
-            isa(mod, Method) && (mod = mod.module)
-            mod === Base || continue
-            sff = string(frame.func)
-            if frame.func == fun || startswith(sff, clos) || startswith(sff, kw)
-                break_next_frame = true
-            end
-        end
-    end
-    @label skip
-    _redirect(io, log_to, sf)
-end
-
-@inline function redirect(io::IO, log_to::Dict, arg::Union{Symbol,StackTraces.StackFrame})
-    if isempty(log_to)
-        return io
-    else
-        if length(log_to)==1 && haskey(log_to,(nothing,nothing))
-            return log_to[(nothing,nothing)]
-        else
-            return _redirect(io, log_to, arg)
-        end
-    end
-end
-
-"""
-    logging(io [, m [, f]][; kind=:all])
-    logging([; kind=:all])
-
-Stream output of informational, warning, and/or error messages to `io`,
-overriding what was otherwise specified.  Optionally, divert stream only for
-module `m`, or specifically function `f` within `m`.  `kind` can be `:all` (the
-default), `:info`, `:warn`, or `:error`.  See `Base.log_{info,warn,error}_to`
-for the current set of redirections.  Call `logging` with no arguments (or just
-the `kind`) to reset everything.
-"""
-function logging(io::IO, m::Union{Module,Void}=nothing, f::Union{Symbol,Void}=nothing;
-                 kind::Symbol=:all)
-    (kind==:all || kind==:info)  && (log_info_to[(m,f)] = io)
-    (kind==:all || kind==:warn)  && (log_warn_to[(m,f)] = io)
-    (kind==:all || kind==:error) && (log_error_to[(m,f)] = io)
-    nothing
-end
-
-function logging(;  kind::Symbol=:all)
-    (kind==:all || kind==:info)  && empty!(log_info_to)
-    (kind==:all || kind==:warn)  && empty!(log_warn_to)
-    (kind==:all || kind==:error) && empty!(log_error_to)
-    nothing
-end
-
-"""
-    info([io, ] msg..., [prefix="INFO: "])
-
-Display an informational message.
-Argument `msg` is a string describing the information to be displayed.
-The `prefix` keyword argument can be used to override the default
-prepending of `msg`.
-
-# Examples
-```jldoctest
-julia> info("hello world")
-INFO: hello world
-
-julia> info("hello world"; prefix="MY INFO: ")
-MY INFO: hello world
-```
-
-See also [`logging`](@ref).
-"""
-function info(io::IO, msg...; prefix="INFO: ")
-    buf = IOBuffer()
-    iob = redirect(IOContext(buf, io), log_info_to, :info)
-    print_with_color(info_color(), iob, prefix; bold = true)
-    println_with_color(info_color(), iob, chomp(string(msg...)))
-    print(io, String(take!(buf)))
-    return
-end
-info(msg...; prefix="INFO: ") = info(STDERR, msg..., prefix=prefix)
-
-# print a warning only once
-
-const have_warned = Set()
-
-warn_once(io::IO, msg...) = warn(io, msg..., once=true)
-warn_once(msg...) = warn(STDERR, msg..., once=true)
-
-"""
-    warn([io, ] msg..., [prefix="WARNING: ", once=false, key=nothing, bt=nothing, filename=nothing, lineno::Int=0])
-
-Display a warning. Argument `msg` is a string describing the warning to be
-displayed.  Set `once` to true and specify a `key` to only display `msg` the
-first time `warn` is called.  If `bt` is not `nothing` a backtrace is displayed.
-If `filename` is not `nothing` both it and `lineno` are displayed.
-
-See also [`logging`](@ref).
-"""
-function warn(io::IO, msg...;
-              prefix="WARNING: ", once=false, key=nothing, bt=nothing,
-              filename=nothing, lineno::Int=0)
-    str = chomp(string(msg...))
-    if once
-        if key === nothing
-            key = str
-        end
-        (key in have_warned) && return
-        push!(have_warned, key)
-    end
-    buf = IOBuffer()
-    iob = redirect(IOContext(buf, io), log_warn_to, :warn)
-    print_with_color(warn_color(), iob, prefix; bold = true)
-    print_with_color(warn_color(), iob, str)
-    if bt !== nothing
-        show_backtrace(iob, bt)
-    end
-    if filename !== nothing
-        print(iob, "\nin expression starting at $filename:$lineno")
-    end
-    println(iob)
-    print(io, String(take!(buf)))
-    return
-end
-
-"""
-    warn(msg)
-
-Display a warning. Argument `msg` is a string describing the warning to be displayed.
-
-# Examples
-```jldoctest
-julia> warn("Beep Beep")
-WARNING: Beep Beep
-```
-"""
-warn(msg...; kw...) = warn(STDERR, msg...; kw...)
-
-warn(io::IO, err::Exception; prefix="ERROR: ", kw...) =
-    warn(io, sprint(showerror, err), prefix=prefix; kw...)
-
-warn(err::Exception; prefix="ERROR: ", kw...) =
-    warn(STDERR, err, prefix=prefix; kw...)
-
-info(io::IO, err::Exception; prefix="ERROR: ", kw...) =
-    info(io, sprint(showerror, err), prefix=prefix; kw...)
-
-info(err::Exception; prefix="ERROR: ", kw...) =
-    info(STDERR, err, prefix=prefix; kw...)
-
-function julia_cmd(julia=joinpath(JULIA_HOME, julia_exename()))
+function julia_cmd(julia=joinpath(Sys.BINDIR, julia_exename()))
     opts = JLOptions()
     cpu_target = unsafe_string(opts.cpu_target)
     image_file = unsafe_string(opts.image_file)
@@ -573,13 +380,13 @@ function securezero! end
 securezero!(s::String) = unsafe_securezero!(pointer(s), sizeof(s))
 @noinline unsafe_securezero!(p::Ptr{T}, len::Integer=1) where {T} =
     ccall(:memset, Ptr{T}, (Ptr{T}, Cint, Csize_t), p, 0, len*sizeof(T))
-unsafe_securezero!(p::Ptr{Void}, len::Integer=1) = Ptr{Void}(unsafe_securezero!(Ptr{UInt8}(p), len))
+unsafe_securezero!(p::Ptr{Cvoid}, len::Integer=1) = Ptr{Cvoid}(unsafe_securezero!(Ptr{UInt8}(p), len))
 
 if Sys.iswindows()
 function getpass(prompt::AbstractString)
     print(prompt)
-    flush(STDOUT)
-    p = Vector{UInt8}(uninitialized, 128) # mimic Unix getpass in ignoring more than 128-char passwords
+    flush(stdout)
+    p = Vector{UInt8}(undef, 128) # mimic Unix getpass in ignoring more than 128-char passwords
                           # (also avoids any potential memory copies arising from push!)
     try
         plen = 0
@@ -608,7 +415,7 @@ getpass(prompt::AbstractString) = unsafe_string(ccall(:getpass, Cstring, (Cstrin
 end
 
 """
-    prompt(message; default="", password=false) -> Nullable{String}
+    prompt(message; default="", password=false) -> Union{String, Nothing}
 
 Displays the `message` then waits for user input. Input is terminated when a newline (\\n)
 is encountered or EOF (^D) character is entered on a blank line. If a `default` is provided
@@ -626,21 +433,21 @@ function prompt(message::AbstractString; default::AbstractString="", password::B
         uinput = getpass(msg)
     else
         print(msg)
-        uinput = readline(chomp=false)
-        isempty(uinput) && return Nullable{String}()  # Encountered an EOF
+        uinput = readline(keep=true)
+        isempty(uinput) && return nothing  # Encountered an EOF
         uinput = chomp(uinput)
     end
-    Nullable{String}(isempty(uinput) ? default : uinput)
+    isempty(uinput) ? default : uinput
 end
 
 # Windows authentication prompt
 if Sys.iswindows()
     struct CREDUI_INFO
         cbSize::UInt32
-        parent::Ptr{Void}
+        parent::Ptr{Cvoid}
         pszMessageText::Ptr{UInt16}
         pszCaptionText::Ptr{UInt16}
-        banner::Ptr{Void}
+        banner::Ptr{Cvoid}
     end
 
     const CREDUIWIN_GENERIC                 = 0x0001
@@ -655,7 +462,7 @@ if Sys.iswindows()
     function winprompt(message, caption, default_username; prompt_username = true)
         # Step 1: Create an encrypted username/password bundle that will be used to set
         #         the default username (in theory could also provide a default password)
-        credbuf = Vector{UInt8}(uninitialized, 1024)
+        credbuf = Vector{UInt8}(undef, 1024)
         credbufsize = Ref{UInt32}(sizeof(credbuf))
         succeeded = ccall((:CredPackAuthenticationBufferW, "credui.dll"), stdcall, Bool,
             (UInt32, Cwstring, Cwstring, Ptr{UInt8}, Ptr{UInt32}),
@@ -674,45 +481,45 @@ if Sys.iswindows()
             dwflags |= CREDUIWIN_IN_CRED_ONLY
         end
         authPackage = Ref{Culong}(0)
-        outbuf_data = Ref{Ptr{Void}}(C_NULL)
+        outbuf_data = Ref{Ptr{Cvoid}}(C_NULL)
         outbuf_size = Ref{Culong}(0)
 
         #      2.2: Do the actual request
         code = ccall((:CredUIPromptForWindowsCredentialsW, "credui.dll"), stdcall, UInt32, (Ptr{CREDUI_INFO}, UInt32, Ptr{Culong},
-            Ptr{Void}, Culong, Ptr{Ptr{Void}}, Ptr{Culong}, Ptr{Bool}, UInt32), cred, 0, authPackage, credbuf, credbufsize[],
+            Ptr{Cvoid}, Culong, Ptr{Ptr{Cvoid}}, Ptr{Culong}, Ptr{Bool}, UInt32), cred, 0, authPackage, credbuf, credbufsize[],
             outbuf_data, outbuf_size, pfSave, dwflags)
 
         #      2.3: If that failed for any reason other than the user canceling, error out.
-        #           If the user canceled, just return a nullable
+        #           If the user canceled, just return nothing
         if code == ERROR_CANCELLED
-            return Nullable{Tuple{String,String}}()
+            return nothing
         elseif code != ERROR_SUCCESS
             error(Base.Libc.FormatMessage(code))
         end
 
         # Step 3: Convert encrypted credentials back to plain text
-        passbuf = Vector{UInt16}(uninitialized, 1024)
+        passbuf = Vector{UInt16}(undef, 1024)
         passlen = Ref{UInt32}(length(passbuf))
-        usernamebuf = Vector{UInt16}(uninitialized, 1024)
+        usernamebuf = Vector{UInt16}(undef, 1024)
         usernamelen = Ref{UInt32}(length(usernamebuf))
         # Need valid buffers for domain, even though we don't care
-        dummybuf = Vector{UInt16}(uninitialized, 1024)
+        dummybuf = Vector{UInt16}(undef, 1024)
         succeeded = ccall((:CredUnPackAuthenticationBufferW, "credui.dll"), Bool,
-            (UInt32, Ptr{Void}, UInt32, Ptr{UInt16}, Ptr{UInt32}, Ptr{UInt16}, Ptr{UInt32}, Ptr{UInt16}, Ptr{UInt32}),
+            (UInt32, Ptr{Cvoid}, UInt32, Ptr{UInt16}, Ptr{UInt32}, Ptr{UInt16}, Ptr{UInt32}, Ptr{UInt16}, Ptr{UInt32}),
             0, outbuf_data[], outbuf_size[], usernamebuf, usernamelen, dummybuf, Ref{UInt32}(1024), passbuf, passlen)
         if !succeeded
             error(Base.Libc.FormatMessage())
         end
 
         # Step 4: Free the encrypted buffer
-        # ccall(:SecureZeroMemory, Ptr{Void}, (Ptr{Void}, Csize_t), outbuf_data[], outbuf_size[]) - not an actual function
+        # ccall(:SecureZeroMemory, Ptr{Cvoid}, (Ptr{Cvoid}, Csize_t), outbuf_data[], outbuf_size[]) - not an actual function
         unsafe_securezero!(outbuf_data[], outbuf_size[])
-        ccall((:CoTaskMemFree, "ole32.dll"), Void, (Ptr{Void},), outbuf_data[])
+        ccall((:CoTaskMemFree, "ole32.dll"), Cvoid, (Ptr{Cvoid},), outbuf_data[])
 
         # Done.
         passbuf_ = passbuf[1:passlen[]-1]
-        result = Nullable((String(transcode(UInt8, usernamebuf[1:usernamelen[]-1])),
-            String(transcode(UInt8, passbuf_))))
+        result = (String(transcode(UInt8, usernamebuf[1:usernamelen[]-1])),
+                  String(transcode(UInt8, passbuf_)))
         securezero!(passbuf_)
         securezero!(passbuf)
 
@@ -732,7 +539,7 @@ function _crc32c(io::IO, nb::Integer, crc::UInt32=0x00000000)
     nb < 0 && throw(ArgumentError("number of bytes to checksum must be ≥ 0"))
     # use block size 24576=8192*3, since that is the threshold for
     # 3-way parallel SIMD code in the underlying jl_crc32c C function.
-    buf = Vector{UInt8}(uninitialized, min(nb, 24576))
+    buf = Vector{UInt8}(undef, min(nb, 24576))
     while !eof(io) && nb > 24576
         n = readbytes!(io, buf)
         crc = unsafe_crc32c(buf, n, crc)
@@ -742,7 +549,8 @@ function _crc32c(io::IO, nb::Integer, crc::UInt32=0x00000000)
 end
 _crc32c(io::IO, crc::UInt32=0x00000000) = _crc32c(io, typemax(Int64), crc)
 _crc32c(io::IOStream, crc::UInt32=0x00000000) = _crc32c(io, filesize(io)-position(io), crc)
-
+_crc32c(uuid::UUID, crc::UInt32=0x00000000) =
+    ccall(:jl_crc32c, UInt32, (UInt32, Ref{UInt128}, Csize_t), crc, uuid.value, 16)
 
 """
     @kwdef typedef
@@ -846,3 +654,37 @@ kwdef_val(::Type{Cwstring}) = Cwstring(C_NULL)
 kwdef_val(::Type{T}) where {T<:Integer} = zero(T)
 
 kwdef_val(::Type{T}) where {T} = T()
+
+# testing
+
+"""
+    Base.runtests(tests=["all"]; ncores=ceil(Int, Sys.CPU_CORES / 2),
+                  exit_on_error=false, [seed])
+
+Run the Julia unit tests listed in `tests`, which can be either a string or an array of
+strings, using `ncores` processors. If `exit_on_error` is `false`, when one test
+fails, all remaining tests in other files will still be run; they are otherwise discarded,
+when `exit_on_error == true`.
+If a seed is provided via the keyword argument, it is used to seed the
+global RNG in the context where the tests are run; otherwise the seed is chosen randomly.
+"""
+function runtests(tests = ["all"]; ncores = ceil(Int, Sys.CPU_CORES / 2),
+                  exit_on_error=false,
+                  seed::Union{BitInteger,Nothing}=nothing)
+    if isa(tests,AbstractString)
+        tests = split(tests)
+    end
+    exit_on_error && push!(tests, "--exit-on-error")
+    seed != nothing && push!(tests, "--seed=0x$(string(seed % UInt128, base=16))") # cast to UInt128 to avoid a minus sign
+    ENV2 = copy(ENV)
+    ENV2["JULIA_CPU_CORES"] = "$ncores"
+    try
+        run(setenv(`$(julia_cmd()) $(joinpath(Sys.BINDIR,
+            Base.DATAROOTDIR, "julia", "test", "runtests.jl")) $tests`, ENV2))
+    catch
+        buf = PipeBuffer()
+        Base.require(Base, :InteractiveUtils).versioninfo(buf)
+        error("A test has failed. Please submit a bug report (https://github.com/JuliaLang/julia/issues)\n" *
+              "including error messages above and the output of versioninfo():\n$(read(buf, String))")
+    end
+end

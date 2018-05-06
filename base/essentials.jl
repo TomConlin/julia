@@ -1,13 +1,13 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-using Core: CodeInfo
+using Core: CodeInfo, SimpleVector
 
 const Callable = Union{Function,Type}
 
 const Bottom = Union{}
 
 abstract type AbstractSet{T} end
-abstract type Associative{K,V} end
+abstract type AbstractDict{K,V} end
 
 # The real @inline macro is not available until after array.jl, so this
 # internal macro splices the meta Expr directly into the function body.
@@ -84,9 +84,9 @@ julia> convert(Int, 3.0)
 3
 
 julia> convert(Int, 3.5)
-ERROR: InexactError: convert(Int64, 3.5)
+ERROR: InexactError: Int64(Int64, 3.5)
 Stacktrace:
- [1] convert(::Type{Int64}, ::Float64) at ./float.jl:703
+[...]
 ```
 
 If `T` is a [`AbstractFloat`](@ref) or [`Rational`](@ref) type,
@@ -106,42 +106,21 @@ julia> convert(Rational{Int64}, x)
 6004799503160661//18014398509481984
 ```
 
-If `T` is a collection type and `x` a collection, the result of `convert(T, x)` may alias
-`x`.
+If `T` is a collection type and `x` a collection, the result of
+`convert(T, x)` may alias all or part of `x`.
 ```jldoctest
-julia> x = Int[1,2,3];
+julia> x = Int[1, 2, 3];
 
 julia> y = convert(Vector{Int}, x);
 
 julia> y === x
 true
 ```
-Similarly, if `T` is a composite type and `x` a related instance, the result of
-`convert(T, x)` may alias part or all of `x`.
-```jldoctest
-julia> x = sparse(1.0I, 5, 5);
-
-julia> typeof(x)
-SparseMatrixCSC{Float64,Int64}
-
-julia> y = convert(SparseMatrixCSC{Float64,Int64}, x);
-
-julia> z = convert(SparseMatrixCSC{Float32,Int64}, y);
-
-julia> y === x
-true
-
-julia> z === x
-false
-
-julia> z.colptr === x.colptr
-true
-```
 """
 function convert end
 
 convert(::Type{Any}, @nospecialize(x)) = x
-convert(::Type{T}, x::T) where {T} = x
+convert(::Type{T}, x::T) where {T} = (@_inline_meta; x)
 
 """
     @eval [mod,] ex
@@ -225,13 +204,22 @@ end
 const _va_typename = Vararg.body.body.name
 function isvarargtype(@nospecialize(t))
     t = unwrap_unionall(t)
-    isa(t, DataType) && (t::DataType).name === _va_typename
+    return isa(t, DataType) && (t::DataType).name === _va_typename
 end
 
 isvatuple(t::DataType) = (n = length(t.parameters); n > 0 && isvarargtype(t.parameters[n]))
 function unwrapva(@nospecialize(t))
+    # NOTE: this returns a related type, but it's NOT a subtype of the original tuple
     t2 = unwrap_unionall(t)
-    isvarargtype(t2) ? t2.parameters[1] : t
+    return isvarargtype(t2) ? rewrap_unionall(t2.parameters[1], t) : t
+end
+
+function unconstrain_vararg_length(@nospecialize(va))
+    # construct a new Vararg type where its length is unconstrained,
+    # but its element type still captures any dependencies the input
+    # element type may have had on the input length
+    T = unwrap_unionall(va).parameters[1]
+    return rewrap_unionall(Vararg{T}, va)
 end
 
 typename(a) = error("typename does not apply to this type")
@@ -239,11 +227,13 @@ typename(a::DataType) = a.name
 function typename(a::Union)
     ta = typename(a.a)
     tb = typename(a.b)
-    ta === tb ? tb : error("typename does not apply to unions whose components have different typenames")
+    ta === tb || error("typename does not apply to unions whose components have different typenames")
+    return tb
 end
 typename(union::UnionAll) = typename(union.body)
 
 convert(::Type{T}, x::T) where {T<:Tuple{Any, Vararg{Any}}} = x
+convert(::Type{Tuple{}}, x::Tuple{Any, Vararg{Any}}) = throw(MethodError(convert, (Tuple{}, x)))
 convert(::Type{T}, x::Tuple{Any, Vararg{Any}}) where {T<:Tuple} =
     (convert(tuple_type_head(T), x[1]), convert(tuple_type_tail(T), tail(x))...)
 
@@ -284,6 +274,19 @@ convert(::Type{T}, x::Tuple{Any, Vararg{Any}}) where {T<:Tuple} =
     oftype(x, y)
 
 Convert `y` to the type of `x` (`convert(typeof(x), y)`).
+
+# Examples
+```jldoctest
+julia> x = 4;
+
+julia> y = 3.;
+
+julia> oftype(x, y)
+3
+
+julia> oftype(y, x)
+4.0
+```
 """
 oftype(x, y) = convert(typeof(x), y)
 
@@ -293,7 +296,7 @@ signed(x::UInt) = reinterpret(Int, x)
 # conversions used by ccall
 ptr_arg_cconvert(::Type{Ptr{T}}, x) where {T} = cconvert(T, x)
 ptr_arg_unsafe_convert(::Type{Ptr{T}}, x) where {T} = unsafe_convert(T, x)
-ptr_arg_unsafe_convert(::Type{Ptr{Void}}, x) = x
+ptr_arg_unsafe_convert(::Type{Ptr{Cvoid}}, x) = x
 
 """
     cconvert(T,x)
@@ -351,14 +354,14 @@ Size, in bytes, of the canonical binary representation of the given DataType `T`
 julia> sizeof(Float32)
 4
 
-julia> sizeof(Complex128)
+julia> sizeof(ComplexF64)
 16
 ```
 
 If `T` does not have a specific size, an error is thrown.
 
 ```jldoctest
-julia> sizeof(Base.LinAlg.LU)
+julia> sizeof(AbstractArray)
 ERROR: argument is an abstract type; size is indeterminate
 Stacktrace:
 [...]
@@ -370,20 +373,20 @@ function append_any(xs...)
     # used by apply() and quote
     # must be a separate function from append(), since apply() needs this
     # exact function.
-    out = Vector{Any}(uninitialized, 4)
+    out = Vector{Any}(undef, 4)
     l = 4
     i = 1
     for x in xs
         for y in x
             if i > l
-                ccall(:jl_array_grow_end, Void, (Any, UInt), out, 16)
+                _growend!(out, 16)
                 l += 16
             end
             Core.arrayset(true, out, y, i)
             i += 1
         end
     end
-    ccall(:jl_array_del_end, Void, (Any, UInt), out, l-i+1)
+    _deleteend!(out, l-i+1)
     out
 end
 
@@ -417,25 +420,29 @@ esc(@nospecialize(e)) = Expr(:escape, e)
 
 Annotates the expression `blk` as a bounds checking block, allowing it to be elided by [`@inbounds`](@ref).
 
-Note that the function in which `@boundscheck` is written must be inlined into
-its caller with [`@inline`](@ref) in order for `@inbounds` to have effect.
+!!! note
+    The function in which `@boundscheck` is written must be inlined into
+    its caller in order for `@inbounds` to have effect.
 
-```jldoctest
+# Examples
+```jldoctest; filter = r"Stacktrace:(\\n \\[[0-9]+\\].*)*"
 julia> @inline function g(A, i)
            @boundscheck checkbounds(A, i)
            return "accessing (\$A)[\$i]"
-       end
-       f1() = return g(1:2, -1)
-       f2() = @inbounds return g(1:2, -1)
-f2 (generic function with 1 method)
+       end;
+
+julia> f1() = return g(1:2, -1);
+
+julia> f2() = @inbounds return g(1:2, -1);
 
 julia> f1()
 ERROR: BoundsError: attempt to access 2-element UnitRange{Int64} at index [-1]
 Stacktrace:
- [1] throw_boundserror(::UnitRange{Int64}, ::Tuple{Int64}) at ./abstractarray.jl:435
- [2] checkbounds at ./abstractarray.jl:399 [inlined]
+ [1] throw_boundserror(::UnitRange{Int64}, ::Tuple{Int64}) at ./abstractarray.jl:455
+ [2] checkbounds at ./abstractarray.jl:420 [inlined]
  [3] g at ./none:2 [inlined]
  [4] f1() at ./none:1
+ [5] top-level scope
 
 julia> f2()
 "accessing (1:2)[-1]"
@@ -484,8 +491,9 @@ end
 macro inbounds(blk)
     return Expr(:block,
         Expr(:inbounds, true),
-        esc(blk),
-        Expr(:inbounds, :pop))
+        Expr(:local, Expr(:(=), :val, esc(blk))),
+        Expr(:inbounds, :pop),
+        :val)
 end
 
 """
@@ -517,7 +525,7 @@ function getindex(v::SimpleVector, i::Int)
         throw(BoundsError(v,i))
     end
     t = @_gc_preserve_begin v
-    x = unsafe_load(convert(Ptr{Ptr{Void}},data_pointer_from_objref(v)) + i*sizeof(Ptr))
+    x = unsafe_load(convert(Ptr{Ptr{Cvoid}},pointer_from_objref(v)) + i*sizeof(Ptr))
     x == C_NULL && throw(UndefRefError())
     o = unsafe_pointer_to_objref(x)
     @_gc_preserve_end t
@@ -526,18 +534,21 @@ end
 
 function length(v::SimpleVector)
     t = @_gc_preserve_begin v
-    l = unsafe_load(convert(Ptr{Int},data_pointer_from_objref(v)))
+    l = unsafe_load(convert(Ptr{Int},pointer_from_objref(v)))
     @_gc_preserve_end t
     return l
 end
-endof(v::SimpleVector) = length(v)
+firstindex(v::SimpleVector) = 1
+lastindex(v::SimpleVector) = length(v)
 start(v::SimpleVector) = 1
 next(v::SimpleVector,i) = (v[i],i+1)
 done(v::SimpleVector,i) = (length(v) < i)
+eltype(::Type{SimpleVector}) = Any
+keys(v::SimpleVector) = OneTo(length(v))
 isempty(v::SimpleVector) = (length(v) == 0)
-indices(v::SimpleVector) = (OneTo(length(v)),)
-linearindices(v::SimpleVector) = indices(v, 1)
-indices(v::SimpleVector, d) = d <= 1 ? indices(v)[d] : OneTo(1)
+axes(v::SimpleVector) = (OneTo(length(v)),)
+linearindices(v::SimpleVector) = axes(v, 1)
+axes(v::SimpleVector, d) = d <= 1 ? axes(v)[d] : OneTo(1)
 
 function ==(v1::SimpleVector, v2::SimpleVector)
     length(v1)==length(v2) || return false
@@ -557,6 +568,7 @@ getindex(v::SimpleVector, I::AbstractArray) = Core.svec(Any[ v[i] for i in I ]..
 Test whether the given array has a value associated with index `i`. Return `false`
 if the index is out of bounds, or has an undefined reference.
 
+# Examples
 ```jldoctest
 julia> isassigned(rand(3, 3), 5)
 true
@@ -581,7 +593,7 @@ function isassigned end
 function isassigned(v::SimpleVector, i::Int)
     @boundscheck 1 <= i <= length(v) || return false
     t = @_gc_preserve_begin v
-    x = unsafe_load(convert(Ptr{Ptr{Void}},data_pointer_from_objref(v)) + i*sizeof(Ptr))
+    x = unsafe_load(convert(Ptr{Ptr{Cvoid}},pointer_from_objref(v)) + i*sizeof(Ptr))
     @_gc_preserve_end t
     return x != C_NULL
 end
@@ -594,8 +606,11 @@ Colons (:) are used to signify indexing entire objects or dimensions at once.
 Very few operations are defined on Colons directly; instead they are converted
 by [`to_indices`](@ref) to an internal vector type (`Base.Slice`) to represent the
 collection of indices they span before being used.
+
+The singleton instance of `Colon` is also a function used to construct ranges;
+see [`:`](@ref).
 """
-struct Colon
+struct Colon <: Function
 end
 const (:) = Colon()
 
@@ -623,36 +638,6 @@ struct Val{x}
 end
 
 Val(x) = (@_pure_meta; Val{x}())
-
-# used by keyword arg call lowering
-function vector_any(@nospecialize xs...)
-    n = length(xs)
-    a = Vector{Any}(uninitialized, n)
-    @inbounds for i = 1:n
-        Core.arrayset(false, a, xs[i], i)
-    end
-    a
-end
-
-function as_kwargs(xs::Union{AbstractArray,Associative})
-    n = length(xs)
-    to = Vector{Any}(uninitialized, n*2)
-    i = 1
-    for (k, v) in xs
-        to[i]   = k::Symbol
-        to[i+1] = v
-        i += 2
-    end
-    return to
-end
-
-function as_kwargs(xs)
-    to = Vector{Any}()
-    for (k, v) in xs
-        ccall(:jl_array_ptr_1d_push2, Void, (Any, Any, Any), to, k::Symbol, v)
-    end
-    return to
-end
 
 """
     invokelatest(f, args...; kwargs...)
@@ -749,5 +734,45 @@ For an iterator or collection that has keys and values, return an iterator
 over the values.
 This function simply returns its argument by default, since the elements
 of a general iterator are normally considered its "values".
+
+# Examples
+```jldoctest
+julia> d = Dict("a"=>1, "b"=>2);
+
+julia> values(d)
+Base.ValueIterator for a Dict{String,Int64} with 2 entries. Values:
+  2
+  1
+
+julia> values([2])
+1-element Array{Int64,1}:
+ 2
+```
 """
 values(itr) = itr
+
+"""
+    Missing
+
+A type with no fields whose singleton instance [`missing`](@ref) is used
+to represent missing values.
+"""
+struct Missing end
+
+"""
+    missing
+
+The singleton instance of type [`Missing`](@ref) representing a missing value.
+"""
+const missing = Missing()
+
+"""
+    ismissing(x)
+
+Indicate whether `x` is [`missing`](@ref).
+"""
+ismissing(::Any) = false
+ismissing(::Missing) = true
+
+function popfirst! end
+function peek end

@@ -1,6 +1,8 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
-dir = joinpath(JULIA_HOME, Base.DOCDIR, "examples")
+using Random
+
+dir = joinpath(Sys.BINDIR, Base.DOCDIR, "examples")
 
 include(joinpath(dir, "bubblesort.jl"))
 a = rand(1:100,100)
@@ -21,7 +23,7 @@ y = inv(x)
 @test_throws DomainError inv(ModInts.ModInt{8}(4))
 
 include(joinpath(dir, "ndgrid.jl"))
-r = repmat(1:10,1,10)
+r = repeat(1:10,1,10)
 r1, r2 = ndgrid(1:10, 1:10)
 @test r1 == r
 @test r2 == r'
@@ -40,11 +42,12 @@ include(joinpath(dir, "queens.jl"))
 if Sys.isunix()
     script = joinpath(dir, "clustermanager/simple/test_simple.jl")
     cmd = `$(Base.julia_cmd()) --startup-file=no $script`
-    if !success(pipeline(cmd; stdout=STDOUT, stderr=STDERR)) && ccall(:jl_running_on_valgrind,Cint,()) == 0
+    if !success(pipeline(cmd; stdout=stdout, stderr=stderr)) && ccall(:jl_running_on_valgrind,Cint,()) == 0
         error("UnixDomainCM failed test, cmd : $cmd")
     end
 end
 
+using Distributed
 dc_path = joinpath(dir, "dictchannel.jl")
 # Run the remote on pid 1, since runtests may terminate workers
 # at any time depending on memory usage

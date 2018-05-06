@@ -1,6 +1,11 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
 ## generic operations on numbers ##
+
+# Numbers are convertible
+convert(::Type{T}, x::T)      where {T<:Number} = x
+convert(::Type{T}, x::Number) where {T<:Number} = T(x)
+
 """
     isinteger(x) -> Bool
 
@@ -41,14 +46,15 @@ isone(x) = x == one(x) # fallback method
 
 size(x::Number) = ()
 size(x::Number,d) = convert(Int,d)<1 ? throw(BoundsError()) : 1
-indices(x::Number) = ()
-indices(x::Number,d) = convert(Int,d)<1 ? throw(BoundsError()) : OneTo(1)
+axes(x::Number) = ()
+axes(x::Number,d) = convert(Int,d)<1 ? throw(BoundsError()) : OneTo(1)
 eltype(::Type{T}) where {T<:Number} = T
 ndims(x::Number) = 0
 ndims(::Type{<:Number}) = 0
 length(x::Number) = 1
-endof(x::Number) = 1
-iteratorsize(::Type{<:Number}) = HasShape()
+firstindex(x::Number) = 1
+lastindex(x::Number) = 1
+IteratorSize(::Type{<:Number}) = HasShape{0}()
 keys(::Number) = OneTo(1)
 
 getindex(x::Number) = x
@@ -64,7 +70,7 @@ function getindex(x::Number, I::Integer...)
 end
 first(x::Number) = x
 last(x::Number) = x
-copy(x::Number) = x  # some code treats numbers as collection-like
+copy(x::Number) = x # some code treats numbers as collection-like
 
 """
     divrem(x, y)

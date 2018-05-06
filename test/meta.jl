@@ -40,12 +40,10 @@ function foundfunc(bt, funcname)
     end
     false
 end
-if inlining_on
-    @test !foundfunc(h_inlined(), :g_inlined)
-end
+@test foundfunc(h_inlined(), :g_inlined)
 @test foundfunc(h_noinlined(), :g_noinlined)
 
-using Base.pushmeta!, Base.popmeta!
+using Base: pushmeta!, popmeta!
 
 macro attach(val, ex)
     esc(_attach(val, ex))
@@ -130,9 +128,6 @@ show_sexpr(ioB,:(1+1))
 
 show_sexpr(ioB,QuoteNode(1),1)
 
-@test Base.Distributed.extract_imports(:(begin; import Foo, Bar; let; using Baz; end; end)) ==
-      [:Foo, :Bar, :Baz]
-
 # test base/expr.jl
 baremodule B
     eval = 0
@@ -164,7 +159,7 @@ end
 @test _nospec_with_default(10) == 20
 
 
-let oldout = STDOUT
+let oldout = stdout
     local rdout, wrout, out
     try
         rdout, wrout = redirect_stdout()
@@ -175,7 +170,7 @@ let oldout = STDOUT
         redirect_stdout(oldout)
         close(wrout)
 
-        @test wait(out) == """
+        @test fetch(out) == """
             Expr
               head: Symbol call
               args: Array{Any}((3,))

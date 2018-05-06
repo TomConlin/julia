@@ -10,7 +10,7 @@ session (technically, in module `Main`), it is always present.
 If memory usage is your concern, you can always replace objects with ones that consume less memory.
  For example, if `A` is a gigabyte-sized array that you no longer need, you can free the memory
 with `A = nothing`.  The memory will be released the next time the garbage collector runs; you can force
-this to happen with [`gc()`](@ref). Moreover, an attempt to use `A` will likely result in an error, because most methods are not defined on type `Void`.
+this to happen with [`gc()`](@ref Base.GC.gc). Moreover, an attempt to use `A` will likely result in an error, because most methods are not defined on type `Nothing`.
 
 ### How can I modify the declaration of a type in my session?
 
@@ -147,18 +147,18 @@ argument is called slurping:
 
 ```jldoctest
 julia> function printargs(args...)
-           @printf("%s\n", typeof(args))
+           println(typeof(args))
            for (i, arg) in enumerate(args)
-               @printf("Arg %d = %s\n", i, arg)
+               println("Arg #$i = $arg")
            end
        end
 printargs (generic function with 1 method)
 
 julia> printargs(1, 2, 3)
 Tuple{Int64,Int64,Int64}
-Arg 1 = 1
-Arg 2 = 2
-Arg 3 = 3
+Arg #1 = 1
+Arg #2 = 2
+Arg #3 = 3
 ```
 
 If Julia were a language that made more liberal use of ASCII characters, the slurping operator
@@ -173,19 +173,19 @@ call. This use of `...` is called splatting:
 
 ```jldoctest
 julia> function threeargs(a, b, c)
-           @printf("a = %s::%s\n", a, typeof(a))
-           @printf("b = %s::%s\n", b, typeof(b))
-           @printf("c = %s::%s\n", c, typeof(c))
+           println("a = $a::$(typeof(a))")
+           println("b = $b::$(typeof(b))")
+           println("c = $c::$(typeof(c))")
        end
 threeargs (generic function with 1 method)
 
-julia> vec = [1, 2, 3]
+julia> x = [1, 2, 3]
 3-element Array{Int64,1}:
  1
  2
  3
 
-julia> threeargs(vec...)
+julia> threeargs(x...)
 a = 1::Int64
 b = 2::Int64
 c = 3::Int64
@@ -615,26 +615,31 @@ all/many future usages of the other functions in module Foo that depend on calli
 
 ### How does "null" or "nothingness" work in Julia?
 
-Unlike many languages (for example, C and Java), Julia does not have a "null" value. When a reference
-(variable, object field, or array element) is uninitialized, accessing it will immediately throw
-an error. This situation can be detected using the `isdefined` function.
+Unlike many languages (for example, C and Java), Julia objects cannot be "null" by default.
+When a reference (variable, object field, or array element) is uninitialized, accessing it
+will immediately throw an error. This situation can be detected using the
+[`isdefined`](@ref) or [`isassigned`](@ref Base.isassigned) functions.
 
 Some functions are used only for their side effects, and do not need to return a value. In these
 cases, the convention is to return the value `nothing`, which is just a singleton object of type
-`Void`. This is an ordinary type with no fields; there is nothing special about it except for
+`Nothing`. This is an ordinary type with no fields; there is nothing special about it except for
 this convention, and that the REPL does not print anything for it. Some language constructs that
 would not otherwise have a value also yield `nothing`, for example `if false; end`.
 
-For situations where a value exists only sometimes (for example, missing statistical data), it
-is best to use the `Nullable{T}` type, which allows specifying the type of a missing value.
+For situations where a value `x` of type `T` exists only sometimes, the `Union{T, Nothing}`
+type can be used. If the value itself can be `nothing` (notably, when `T` is `Any`),
+the `Union{Some{T}, Nothing}` type is more appropriate since `x == nothing` then indicates
+the absence of a value, and `x == Some(nothing)` indicates the presence of a value equal
+to `nothing`.
+
+To represent missing data in the statistical sense (`NA` in R or `NULL` in SQL), use the
+[`missing`](@ref) object. See the [`Missing Values`](@ref missing) section for more details.
 
 The empty tuple (`()`) is another form of nothingness. But, it should not really be thought of
 as nothing but rather a tuple of zero values.
 
-In code written for Julia prior to version 0.4 you may occasionally see `None`, which is quite
-different. It is the empty (or "bottom") type, a type with no values and no subtypes (except itself).
-This is now written as `Union{}` (an empty union type). You will generally not need to use this
-type.
+The empty (or "bottom") type, written as `Union{}` (an empty union type), is a type with
+no values and no subtypes (except itself). You will generally not need to use this type.
 
 ## Memory
 
@@ -688,7 +693,7 @@ Consider the printed output from the following:
 
 ```jldoctest
 julia> @sync for i in 1:3
-           @async write(STDOUT, string(i), " Foo ", " Bar ")
+           @async write(stdout, string(i), " Foo ", " Bar ")
        end
 123 Foo  Foo  Foo  Bar  Bar  Bar
 ```
@@ -701,7 +706,7 @@ in the above example results in:
 
 ```jldoctest
 julia> @sync for i in 1:3
-           @async println(STDOUT, string(i), " Foo ", " Bar ")
+           @async println(stdout, string(i), " Foo ", " Bar ")
        end
 1 Foo  Bar
 2 Foo  Bar
@@ -712,13 +717,13 @@ You can lock your writes with a `ReentrantLock` like this:
 
 ```jldoctest
 julia> l = ReentrantLock()
-ReentrantLock(Nullable{Task}(), Condition(Any[]), 0)
+ReentrantLock(nothing, Condition(Any[]), 0)
 
 julia> @sync for i in 1:3
            @async begin
                lock(l)
                try
-                   write(STDOUT, string(i), " Foo ", " Bar ")
+                   write(stdout, string(i), " Foo ", " Bar ")
                finally
                    unlock(l)
                end

@@ -53,6 +53,15 @@
         0x0010ffff      '\U10ffff'  "\\U10ffff"
     ]
 
+    buf = IOBuffer()
+    @test typeof(escape_string(buf, "test")) == Nothing
+    @test String(take!(buf)) == "test"
+    @test typeof(escape_string(buf, "hello", "l")) == Nothing
+    @test String(take!(buf)) == "he\\l\\lo"
+
+    @test typeof(escape_string("test", "t")) == String
+    @test escape_string("test", "t") == "\\tes\\t"
+
     for i = 1:size(cx,1)
         cp, ch, st = cx[i,:]
         @test cp == convert(UInt32, ch)
@@ -71,15 +80,15 @@
                          "\uFFFF","\U10000","\U10FFF","\U10FFFF"]
         c = Char(i)
         cp = string(c,p)
-        op = string(Char(div(i,8)), oct(i%8), p)
-        hp = string(Char(div(i,16)), hex(i%16), p)
-        @test string(unescape_string(string("\\",oct(i,1),p))) == cp
-        @test string(unescape_string(string("\\",oct(i,2),p))) == cp
-        @test string(unescape_string(string("\\",oct(i,3),p))) == cp
-        @test string(unescape_string(string("\\",oct(i,4),p))) == op
-        @test string(unescape_string(string("\\x",hex(i,1),p))) == cp
-        @test string(unescape_string(string("\\x",hex(i,2),p))) == cp
-        @test string(unescape_string(string("\\x",hex(i,3),p))) == hp
+        op = string(Char(div(i,8)), string(i%8, base = 8), p)
+        hp = string(Char(div(i,16)), string(i%16, base = 16), p)
+        @test string(unescape_string(string("\\",string(i,base=8,pad=1),p))) == cp
+        @test string(unescape_string(string("\\",string(i,base=8,pad=2),p))) == cp
+        @test string(unescape_string(string("\\",string(i,base=8,pad=3),p))) == cp
+        @test string(unescape_string(string("\\",string(i,base=8,pad=4),p))) == op
+        @test string(unescape_string(string("\\x",string(i,base=16,pad=1),p))) == cp
+        @test string(unescape_string(string("\\x",string(i,base=16,pad=2),p))) == cp
+        @test string(unescape_string(string("\\x",string(i,base=16,pad=3),p))) == hp
     end
 
     @testset "unescape_string" begin
@@ -135,7 +144,8 @@
     end
 end
 @testset "join()" begin
-    @test join([]) == ""
+    @test join([]) == join([],",") == ""
+    @test_broken join(()) == join((),",") == ""
     @test join(["a"],"?") == "a"
     @test join("HELLO",'-') == "H-E-L-L-O"
     @test join(1:5, ", ", " and ") == "1, 2, 3, 4 and 5"
@@ -163,8 +173,7 @@ myio = IOBuffer()
 join(myio, "", "", 1)
 @test isempty(take!(myio))
 
-@testset "unescape_chars" begin
-    @test Base.unescape_chars("\\t","t") == "t"
+@testset "unescape_string ArgumentErrors" begin
     @test_throws ArgumentError unescape_string(IOBuffer(), string('\\',"xZ"))
     @test_throws ArgumentError unescape_string(IOBuffer(), string('\\',"777"))
 end
