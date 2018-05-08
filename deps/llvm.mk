@@ -65,7 +65,7 @@ LLVM_CXXFLAGS += $(CXXFLAGS)
 LLVM_CPPFLAGS += $(CPPFLAGS)
 LLVM_LDFLAGS += $(LDFLAGS)
 LLVM_CMAKE += -DLLVM_TARGETS_TO_BUILD:STRING="$(LLVM_TARGETS)" -DCMAKE_BUILD_TYPE="$(LLVM_CMAKE_BUILDTYPE)"
-LLVM_CMAKE += -DLLVM_ENABLE_ZLIB=OFF
+LLVM_CMAKE += -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_LIBXML2=OFF
 ifeq ($(USE_POLLY_ACC),1)
 LLVM_CMAKE += -DPOLLY_ENABLE_GPGPU_CODEGEN=ON
 endif
@@ -418,6 +418,7 @@ $(eval $(call LLVM_PATCH,llvm-D30114)) # PPC remove for 5.0
 $(eval $(call LLVM_PATCH,llvm-PR36292)) # PPC fixes #26249, remove for 6.0
 $(eval $(call LLVM_PATCH,llvm-D39297-musl-dynamiclibrary-pre5)) # Remove for 6.0
 $(eval $(call LLVM_PATCH,llvm-D28476-musl-targetlibraryinfo_3.9)) # Remove for 5.0
+$(eval $(call LLVM_PATCH,llvm-D46460))
 ifeq ($(BUILD_LLVM_CLANG),1)
 $(eval $(call LLVM_PATCH,compiler_rt-3.9-glibc_2.25.90)) # Remove for 5.0
 $(eval $(call LLVM_PATCH,clang-D28477)) # Remove for 5.0
@@ -452,6 +453,7 @@ $(eval $(call LLVM_PATCH,llvm-D30114)) # PPC remove for 5.0
 $(eval $(call LLVM_PATCH,llvm-PR36292)) # PPC fixes #26249, remove for 6.0
 $(eval $(call LLVM_PATCH,llvm-D39297-musl-dynamiclibrary-pre5)) # Remove for 6.0
 $(eval $(call LLVM_PATCH,llvm-D28476-musl-targetlibraryinfo_4.0)) # Remove for 5.0
+$(eval $(call LLVM_PATCH,llvm-D46460))
 ifeq ($(BUILD_LLVM_CLANG),1)
 $(eval $(call LLVM_PATCH,compiler_rt-3.9-glibc_2.25.90)) # Remove for 5.0
 $(eval $(call LLVM_PATCH,clang-D28477)) # Remove for 5.0
@@ -470,6 +472,7 @@ $(eval $(call LLVM_PATCH,llvm-D42262-jumpthreading-not-i1)) # remove for 7.0
 $(eval $(call LLVM_PATCH,llvm-PPC-addrspaces)) # PPC
 $(eval $(call LLVM_PATCH,llvm-PR36292-5.0)) # PPC fixes #26249, remove for 6.0
 $(eval $(call LLVM_PATCH,llvm-D39297-musl-dynamiclibrary)) # Remove for 6.0
+$(eval $(call LLVM_PATCH,llvm-D46460))
 else ifeq ($(LLVM_VER_SHORT),6.0)
 $(eval $(call LLVM_PATCH,llvm-D27629-AArch64-large_model_4.0))
 $(eval $(call LLVM_PATCH,llvm-D34078-vectorize-fdiv))
@@ -484,6 +487,7 @@ $(eval $(call LLVM_PATCH,llvm-6.0-D44650)) # mingw32 build fix
 $(eval $(call LLVM_PATCH,llvm-D45008)) # remove for 7.0
 $(eval $(call LLVM_PATCH,llvm-D45070)) # remove for 7.0
 $(eval $(call LLVM_PATCH,llvm-6.0.0-ifconv-D45819)) # remove for 7.0
+$(eval $(call LLVM_PATCH,llvm-D46460))
 endif # LLVM_VER
 
 # Remove hardcoded OS X requirements in compilter-rt cmake build
