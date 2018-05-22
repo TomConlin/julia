@@ -341,11 +341,11 @@ The `@test_broken f(args...) key=val...` form works as for the `@test` macro.
 ```jldoctest
 julia> @test_broken 1 == 2
 Test Broken
-Expression: 1 == 2
+  Expression: 1 == 2
 
 julia> @test_broken 1 == 2 atol=0.1
 Test Broken
-Expression: ==(1, 2, atol=0.1)
+  Expression: ==(1, 2, atol=0.1)
 ```
 """
 macro test_broken(ex, kws...)
@@ -1418,7 +1418,7 @@ function detect_unbound_args(mods...;
                             params = tuple_sig.parameters[1:(end - 1)]
                             tuple_sig = Base.rewrap_unionall(Tuple{params...}, m.sig)
                             mf = ccall(:jl_gf_invoke_lookup, Any, (Any, UInt), tuple_sig, typemax(UInt))
-                            if mf != nothing && mf.func !== m && mf.func.sig <: tuple_sig
+                            if mf !== nothing && mf.func !== m && mf.func.sig <: tuple_sig
                                 continue
                             end
                         end
@@ -1499,7 +1499,7 @@ Base.ncodeunits(s::GenericString) = ncodeunits(s.string)
 Base.codeunit(s::GenericString) = codeunit(s.string)
 Base.codeunit(s::GenericString, i::Integer) = codeunit(s.string, i)
 Base.isvalid(s::GenericString, i::Integer) = isvalid(s.string, i)
-Base.next(s::GenericString, i::Integer) = next(s.string, i)
+Base.iterate(s::GenericString, i::Integer=1) = iterate(s.string, i)
 Base.reverse(s::GenericString) = GenericString(reverse(s.string))
 Base.reverse(s::SubString{GenericString}) =
     GenericString(typeof(s.string)(reverse(String(s))))
@@ -1525,10 +1525,9 @@ end
 for (G, A) in ((GenericSet, AbstractSet),
                (GenericDict, AbstractDict))
     @eval begin
-        Base.done(s::$G, state) = done(s.s, state)
-        Base.next(s::$G, state) = next(s.s, state)
+        Base.iterate(s::$G, state...) = iterate(s.s, state...)
     end
-    for f in (:isempty, :length, :start)
+    for f in (:isempty, :length)
         @eval begin
             Base.$f(s::$G) = $f(s.s)
         end
@@ -1600,7 +1599,7 @@ begin
     function test_approx_eq(va, vb, Eps, astr, bstr)
         va = approx_full(va)
         vb = approx_full(vb)
-        la, lb = length(linearindices(va)), length(linearindices(vb))
+        la, lb = length(LinearIndices(va)), length(LinearIndices(vb))
         if la != lb
             error("lengths of ", astr, " and ", bstr, " do not match: ",
                 "\n  ", astr, " (length $la) = ", va,
@@ -1630,7 +1629,7 @@ begin
     array_eps(a) = eps(float(maximum(x->(isfinite(x) ? abs(x) : oftype(x,NaN)), a)))
 
     test_approx_eq(va, vb, astr, bstr) =
-        test_approx_eq(va, vb, 1E4*length(linearindices(va))*max(array_eps(va), array_eps(vb)), astr, bstr)
+        test_approx_eq(va, vb, 1E4*length(LinearIndices(va))*max(array_eps(va), array_eps(vb)), astr, bstr)
 
     """
         @test_approx_eq_eps(a, b, tol)

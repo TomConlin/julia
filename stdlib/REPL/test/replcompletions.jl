@@ -82,7 +82,7 @@ let ex = quote
         test_dict_ℂ = Dict(1=>2)
     end
     ex.head = :toplevel
-    eval(Main, ex)
+    Core.eval(Main, ex)
 end
 
 function temp_pkg_dir_noinit(fn::Function)
@@ -521,6 +521,26 @@ temp_pkg_dir_noinit() do
     @test !("CompletionFooPackageNone2" in c) #The package
     @test s[r] == "Completion"
 end
+
+path = joinpath(tempdir(),randstring())
+pushfirst!(LOAD_PATH, path)
+try
+    mkpath(path)
+    write(joinpath(path, "Project.toml"),
+        """
+        name = "MyProj"
+
+        [deps]
+        MyPack = "09ebe64f-f76c-4f21-bef2-bd9be6c77e76"
+        """)
+        c, r, res = test_complete("using MyP")
+        @test "MyPack" in c
+        @test "MyProj" in c
+finally
+    @test popfirst!(LOAD_PATH) == path
+    rm(path, recursive=true)
+end
+
 
 path = joinpath(tempdir(),randstring())
 push!(LOAD_PATH, path)

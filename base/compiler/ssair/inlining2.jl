@@ -346,7 +346,7 @@ function ir_inline_item!(compact::IncrementalCompact, idx::Int, argexprs::Vector
     return_value
 end
 
-function ir_inline_unionsplit!(compact::IncrementalCompact, idx::Int,
+function ir_inline_unionsplit!(compact::IncrementalCompact, topmod::Module, idx::Int,
                                argexprs::Vector{Any}, linetable::Vector{LineInfoNode},
                                item::UnionSplit, boundscheck::Symbol, todo_bbs::Vector{Tuple{Int, Int}})
     stmt, typ, line = compact.result[idx], compact.result_types[idx], compact.result_lines[idx]
@@ -379,11 +379,22 @@ function ir_inline_unionsplit!(compact::IncrementalCompact, idx::Int,
         insert_node_here!(compact, GotoIfNot(cond, next_cond_bb), Union{}, line)
         bb = next_cond_bb - 1
         finish_current_bb!(compact)
-        # Insert Pi nodes here
+        argexprs′ = argexprs
+        if !isa(case, ConstantCase)
+            argexprs′ = copy(argexprs)
+            for i = 2:length(metharg.parameters)
+                a, m = atype.parameters[i], metharg.parameters[i]
+                isa(argexprs[i], SSAValue) || continue
+                if !(a <: m)
+                    argexprs′[i] = insert_node_here!(compact, PiNode(argexprs′[i], m),
+                                                     m, line)
+                end
+            end
+        end
         if isa(case, InliningTodo)
-            val = ir_inline_item!(compact, idx, argexprs, linetable, case, boundscheck, todo_bbs)
+            val = ir_inline_item!(compact, idx, argexprs′, linetable, case, boundscheck, todo_bbs)
         elseif isa(case, MethodInstance)
-            val = insert_node_here!(compact, Expr(:invoke, case, argexprs...), typ, line)
+            val = insert_node_here!(compact, Expr(:invoke, case, argexprs′...), typ, line)
         else
             case = case::ConstantCase
             val = case.val
@@ -396,7 +407,7 @@ function ir_inline_unionsplit!(compact::IncrementalCompact, idx::Int,
     bb += 1
     # We're now in the fall through block, decide what to do
     if item.fully_covered
-        e = Expr(:call, :error, "fatal error in type inference (type bound)")
+        e = Expr(:call, GlobalRef(topmod, :error), "fatal error in type inference (type bound)")
         e.typ = Union{}
         insert_node_here!(compact, e, Union{}, line)
         insert_node_here!(compact, ReturnNode(), Union{}, line)
@@ -464,7 +475,7 @@ function batch_inline!(todo::Vector{Any}, ir::IRCode, linetable::Vector{LineInfo
                 if isa(item, InliningTodo)
                     compact.ssa_rename[compact.idx-1] = ir_inline_item!(compact, idx, argexprs, linetable, item, boundscheck, state.todo_bbs)
                 elseif isa(item, UnionSplit)
-                    ir_inline_unionsplit!(compact, idx, argexprs, linetable, item, boundscheck, state.todo_bbs)
+                    ir_inline_unionsplit!(compact, _topmod(sv.mod), idx, argexprs, linetable, item, boundscheck, state.todo_bbs)
                 end
                 compact[idx] = nothing
                 refinish && finish_current_bb!(compact)
@@ -629,13 +640,15 @@ end
 struct SimpleCartesian
     ranges::Vector{UnitRange{Int}}
 end
-start(s::SimpleCartesian) = Int[1 for _ in 1:length(s.ranges)]
-done(s::SimpleCartesian, state) = state[end] > last(s.ranges[end])
-function next(s::SimpleCartesian, state)
+function iterate(s::SimpleCartesian, state::Vector{Int}=Int[1 for _ in 1:length(s.ranges)])
+    state[end] > last(s.ranges[end]) && return nothing
     vals = copy(state)
     any = false
     for i = 1:length(s.ranges)
         if state[i] < last(s.ranges[i])
+            for j = 1:(i-1)
+                state[j] = first(s.ranges[j])
+            end
             state[i] += 1
             any = true
             break
@@ -659,10 +672,10 @@ function UnionSplitSignature(atypes::Vector{Any})
     UnionSplitSignature(SimpleCartesian(ranges), typs)
 end
 
-start(split::UnionSplitSignature) = start(split.it)
-done(split::UnionSplitSignature, state) = done(split.it, state)
-function next(split::UnionSplitSignature, state)
-    idxs, state = next(split.it, state)
+function iterate(split::UnionSplitSignature, state::Vector{Int}...)
+    y = iterate(split.it, state...)
+    y === nothing && return nothing
+    idxs, state = y
     sig = Any[split.typs[i][j] for (i,j) in enumerate(idxs)]
     sig, state
 end
@@ -854,6 +867,7 @@ function assemble_inline_todo!(ir::IRCode, linetable::Vector{LineInfoNode}, sv::
         # Now, if profitable union split the atypes into dispatch tuples and match the appropriate method
         nu = countunionsplit(atypes)
         if nu != 1 && nu <= sv.params.MAX_UNION_SPLITTING
+            fully_covered = true
             for sig in UnionSplitSignature(atypes)
                 metharg′ = argtypes_to_type(sig)
                 if !isdispatchtuple(metharg′)
@@ -1006,7 +1020,7 @@ function late_inline_special_case!(ir::IRCode, idx::Int, stmt::Expr, atypes::Vec
             ir[SSAValue(idx)] = quoted(stmt.typ.val)
             return true
         end
-        subtype_call = Expr(:call, GlobalRef(Core, :(<:)), arg_T2, arg_T1)
+        subtype_call = Expr(:call, GlobalRef(Core, :(<:)), stmt.args[3], stmt.args[2])
         subtype_call.typ = Bool
         ir[SSAValue(idx)] = subtype_call
         return true

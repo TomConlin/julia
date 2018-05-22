@@ -1,13 +1,17 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+"""
+    Base.Broadcast
+
+Module containing the broadcasting implementation.
+"""
 module Broadcast
 
 using .Base.Cartesian
-using .Base: Indices, OneTo, linearindices, tail, to_shape, isoperator, promote_typejoin,
+using .Base: Indices, OneTo, tail, to_shape, isoperator, promote_typejoin,
              _msk_end, unsafe_bitgetindex, bitcache_chunks, bitcache_size, dumpbitcache, unalias
 import .Base: copy, copyto!
-export broadcast, broadcast!, BroadcastStyle, broadcast_axes, broadcast_similar, broadcastable,
-       broadcast_getindex, broadcast_setindex!, dotview, @__dot__
+export broadcast, broadcast!, BroadcastStyle, broadcast_axes, broadcastable, dotview, @__dot__
 
 ### Objects with customized broadcasting behavior should declare a BroadcastStyle
 
@@ -20,8 +24,8 @@ by defining a type/method pair
     struct MyContainerStyle <: BroadcastStyle end
     Base.BroadcastStyle(::Type{<:MyContainer}) = MyContainerStyle()
 
-One then writes method(s) (at least [`broadcast_similar`](@ref)) operating on
-`MyContainerStyle`. There are also several pre-defined subtypes of `BroadcastStyle`
+One then writes method(s) (at least [`similar`](@ref)) operating on
+`Broadcasted{MyContainerStyle}`. There are also several pre-defined subtypes of `BroadcastStyle`
 that you may be able to leverage; see the
 [Interfaces chapter](@ref man-interfaces-broadcasting) for more information.
 """
@@ -33,13 +37,6 @@ parameter `C`. You can use this as an alternative to creating custom subtypes of
 for example
 
     Base.BroadcastStyle(::Type{<:MyContainer}) = Broadcast.Style{MyContainer}()
-
-There is a pre-defined [`broadcast_similar`](@ref) method
-
-    broadcast_similar(f, ::Style{C}, ::Type{ElType}, inds, args...) =
-        similar(C, ElType, inds)
-
-Naturally you can specialize this for your particular `C` (e.g., `MyContainer`).
 """
 struct Style{T} <: BroadcastStyle end
 
@@ -183,26 +180,26 @@ end
 Base.convert(::Type{Broadcasted{NewStyle}}, bc::Broadcasted{Style,Axes,F,Args}) where {NewStyle,Style,Axes,F,Args} =
     Broadcasted{NewStyle,Axes,F,Args}(bc.f, bc.args, bc.axes)
 
-Base.show(io::IO, bc::Broadcasted{Style}) where {Style} = print(io, Broadcasted, '{', Style, "}(", bc.f, ", ", bc.args, ')')
+function Base.show(io::IO, bc::Broadcasted{Style}) where {Style}
+    print(io, Broadcasted)
+    # Only show the style parameter if we have a set of axes — representing an instantiated
+    # "outermost" Broadcasted. The styles of nested Broadcasteds represent an intermediate
+    # computation that is not relevant for dispatch, confusing, and just extra line noise.
+    bc.axes isa Tuple && print(io, '{', Style, '}')
+    print(io, '(', bc.f, ", ", bc.args, ')')
+    nothing
+end
 
 ## Allocating the output container
-"""
-    broadcast_similar(::BroadcastStyle, ::Type{ElType}, inds, bc)
-
-Allocate an output object for [`broadcast`](@ref), appropriate for the indicated
-[`Broadcast.BroadcastStyle`](@ref). `ElType` and `inds` specify the desired element type and axes of the
-container. The final `bc` argument is the `Broadcasted` object representing the fused broadcast operation
-and its arguments.
-"""
-broadcast_similar(::DefaultArrayStyle{N}, ::Type{ElType}, inds::Indices{N}, bc) where {N,ElType} =
-    similar(Array{ElType}, inds)
-broadcast_similar(::DefaultArrayStyle{N}, ::Type{Bool}, inds::Indices{N}, bc) where N =
-    similar(BitArray, inds)
+Base.similar(bc::Broadcasted{DefaultArrayStyle{N}}, ::Type{ElType}) where {N,ElType} =
+    similar(Array{ElType}, axes(bc))
+Base.similar(bc::Broadcasted{DefaultArrayStyle{N}}, ::Type{Bool}) where N =
+    similar(BitArray, axes(bc))
 # In cases of conflict we fall back on Array
-broadcast_similar(::ArrayConflict, ::Type{ElType}, inds::Indices, bc) where ElType =
-    similar(Array{ElType}, inds)
-broadcast_similar(::ArrayConflict, ::Type{Bool}, inds::Indices, bc) =
-    similar(BitArray, inds)
+Base.similar(bc::Broadcasted{ArrayConflict}, ::Type{ElType}) where ElType =
+    similar(Array{ElType}, axes(bc))
+Base.similar(bc::Broadcasted{ArrayConflict}, ::Type{Bool}) =
+    similar(BitArray, axes(bc))
 
 ## Computing the result's axes. Most types probably won't need to specialize this.
 broadcast_axes() = ()
@@ -217,8 +214,6 @@ Compute the axes for `A`.
 This should only be specialized for objects that do not define axes but want to participate in broadcasting.
 """
 broadcast_axes
-
-### End of methods that users will typically have to specialize ###
 
 @inline Base.axes(bc::Broadcasted) = _axes(bc, bc.axes)
 _axes(::Broadcasted, axes::Tuple) = axes
@@ -239,19 +234,42 @@ _not_nested(t::Tuple)       = _not_nested(tail(t))
 _not_nested(::NestedTuple)  = false
 _not_nested(::Tuple{})      = true
 
+@inline Base.eachindex(bc::Broadcasted) = _eachindex(axes(bc))
+_eachindex(t::Tuple{Any}) = t[1]
+_eachindex(t::Tuple) = CartesianIndices(t)
+
+Base.ndims(::Broadcasted{<:Any,<:NTuple{N,Any}}) where {N} = N
+Base.ndims(::Type{<:Broadcasted{<:Any,<:NTuple{N,Any}}}) where {N} = N
+
+Base.length(bc::Broadcasted) = prod(map(length, axes(bc)))
+Base.size(bc::Broadcasted) = _size(axes(bc))
+_size(::Tuple{Vararg{Base.OneTo}}) = map(length, axes(bc))
+
+function Base.iterate(bc::Broadcasted)
+    iter = eachindex(bc)
+    iterate(bc, (iter,))
+end
+Base.@propagate_inbounds function Base.iterate(bc::Broadcasted, s)
+    y = iterate(s...)
+    y === nothing && return nothing
+    i, newstate = y
+    return (bc[i], (s[1], newstate))
+end
+
+Base.IteratorSize(::Type{<:Broadcasted{<:Any,<:NTuple{N,Base.OneTo}}}) where {N} = Base.HasShape{N}()
+Base.IteratorEltype(::Type{<:Broadcasted}) = Base.EltypeUnknown()
+
 ## Instantiation fills in the "missing" fields in Broadcasted.
 instantiate(x) = x
 
 """
     Broadcast.instantiate(bc::Broadcasted)
 
-Construct the axes and indexing helpers for the lazy Broadcasted object `bc`.
+Construct and check the axes for the lazy Broadcasted object `bc`.
 
 Custom `BroadcastStyle`s may override this default in cases where it is fast and easy
-to compute the resulting `axes` and indexing helpers on-demand, leaving those fields
-of the `Broadcasted` object empty (populated with `nothing`). If they do so, however,
-they must provide their own `Base.axes(::Broadcasted{Style})` and
-`Base.getindex(::Broadcasted{Style}, I::Union{Int,CartesianIndex})` methods as appropriate.
+to compute and verify the resulting `axes` on-demand, leaving the `axis` field
+of the `Broadcasted` object empty (populated with `nothing`).
 """
 @inline function instantiate(bc::Broadcasted{Style}) where {Style}
     if bc.axes isa Nothing # Not done via dispatch to make it easier to extend instantiate(::Broadcasted{Style})
@@ -481,6 +499,7 @@ Base.@propagate_inbounds _newindex(ax::Tuple{}, I::Tuple{}) = ()
 # If dot-broadcasting were already defined, this would be `ifelse.(keep, I, Idefault)`.
 @inline newindex(I::CartesianIndex, keep, Idefault) = CartesianIndex(_newindex(I.I, keep, Idefault))
 @inline newindex(i::Int, keep::Tuple{Bool}, idefault) = ifelse(keep[1], i, idefault[1])
+@inline newindex(i::Int, keep::Tuple{}, idefault) = CartesianIndex(())
 @inline _newindex(I, keep, Idefault) =
     (ifelse(keep[1], I[1], Idefault[1]), _newindex(tail(I), tail(keep), tail(Idefault))...)
 @inline _newindex(I, keep::Tuple{}, Idefault) = ()  # truncate if keep is shorter than I
@@ -496,12 +515,14 @@ Base.@propagate_inbounds _newindex(ax::Tuple{}, I::Tuple{}) = ()
     (length(ind1)!=1, keep...), (first(ind1), Idefault...)
 end
 
-@inline function Base.getindex(bc::Broadcasted, I)
+@inline function Base.getindex(bc::Broadcasted, I::Union{Int,CartesianIndex})
     @boundscheck checkbounds(bc, I)
     @inbounds _broadcast_getindex(bc, I)
 end
+Base.@propagate_inbounds Base.getindex(bc::Broadcasted, i1::Int, i2::Int, I::Int...) = bc[CartesianIndex((i1, i2, I...))]
+Base.@propagate_inbounds Base.getindex(bc::Broadcasted) = bc[CartesianIndex(())]
 
-@inline Base.checkbounds(bc::Broadcasted, I) =
+@inline Base.checkbounds(bc::Broadcasted, I::Union{Int,CartesianIndex}) =
     Base.checkbounds_indices(Bool, axes(bc), (I,)) || Base.throw_boundserror(bc, (I,))
 
 
@@ -566,7 +587,7 @@ Base.@propagate_inbounds _getindex(args::Tuple{}, I) = ()
 @inline _broadcast_getindex_evalf(f::Tf, args::Vararg{Any,N}) where {Tf,N} = f(args...)  # not propagate_inbounds
 
 """
-    broadcastable(x)
+    Broadcast.broadcastable(x)
 
 Return either `x` or an object like `x` such that it supports `axes`, indexing, and its type supports `ndims`.
 
@@ -580,16 +601,16 @@ Further, if `x` defines its own [`BroadcastStyle`](@ref), then it must define it
 
 # Examples
 ```jldoctest
-julia> broadcastable([1,2,3]) # like `identity` since arrays already support axes and indexing
+julia> Broadcast.broadcastable([1,2,3]) # like `identity` since arrays already support axes and indexing
 3-element Array{Int64,1}:
  1
  2
  3
 
-julia> broadcastable(Int) # Types don't support axes, indexing, or iteration but are commonly used as scalars
+julia> Broadcast.broadcastable(Int) # Types don't support axes, indexing, or iteration but are commonly used as scalars
 Base.RefValue{Type{Int64}}(Int64)
 
-julia> broadcastable("hello") # Strings break convention of matching iteration and act like a scalar instead
+julia> Broadcast.broadcastable("hello") # Strings break convention of matching iteration and act like a scalar instead
 Base.RefValue{String}("hello")
 ```
 """
@@ -733,22 +754,22 @@ const NonleafHandlingStyles = Union{DefaultArrayStyle,ArrayConflict}
     ElType = combine_eltypes(bc.f, bc.args)
     if Base.isconcretetype(ElType)
         # We can trust it and defer to the simpler `copyto!`
-        return copyto!(broadcast_similar(Style(), ElType, axes(bc), bc), bc)
+        return copyto!(similar(bc, ElType), bc)
     end
     # When ElType is not concrete, use narrowing. Use the first output
     # value to determine the starting output eltype; copyto_nonleaf!
     # will widen `dest` as needed to accommodate later values.
     bc′ = preprocess(nothing, bc)
-    iter = CartesianIndices(axes(bc′))
-    state = start(iter)
-    if done(iter, state)
+    iter = eachindex(bc′)
+    y = iterate(iter)
+    if y === nothing
         # if empty, take the ElType at face value
-        return broadcast_similar(Style(), ElType, axes(bc′), bc′)
+        return similar(bc′, ElType)
     end
     # Initialize using the first value
-    I, state = next(iter, state)
+    I, state = y
     @inbounds val = bc′[I]
-    dest = broadcast_similar(Style(), typeof(val), axes(bc′), bc′)
+    dest = similar(bc′, typeof(val))
     @inbounds dest[I] = val
     # Now handle the remaining values
     return copyto_nonleaf!(dest, bc′, iter, state, 1)
@@ -807,7 +828,7 @@ preprocess_args(dest, args::Tuple{}) = ()
         end
     end
     bc′ = preprocess(dest, bc)
-    @simd for I in CartesianIndices(axes(bc′))
+    @simd for I in eachindex(bc′)
         @inbounds dest[I] = bc′[I]
     end
     return dest
@@ -822,7 +843,7 @@ end
     destc = dest.chunks
     ind = cind = 1
     bc′ = preprocess(dest, bc)
-    @simd for I in CartesianIndices(axes(bc′))
+    @simd for I in eachindex(bc′)
         @inbounds tmp[ind] = bc′[I]
         ind += 1
         if ind > bitcache_size
@@ -889,8 +910,10 @@ end
 
 function copyto_nonleaf!(dest, bc::Broadcasted, iter, state, count)
     T = eltype(dest)
-    while !done(iter, state)
-        I, state = next(iter, state)
+    while true
+        y = iterate(iter, state)
+        y === nothing && break
+        I, state = y
         @inbounds val = bc[I]
         S = typeof(val)
         if S <: T
@@ -988,125 +1011,6 @@ broadcasted(::DefaultArrayStyle{1}, ::typeof(big), r::UnitRange) = big(r.start):
 broadcasted(::DefaultArrayStyle{1}, ::typeof(big), r::StepRange) = big(r.start):big(r.step):big(last(r))
 broadcasted(::DefaultArrayStyle{1}, ::typeof(big), r::StepRangeLen) = StepRangeLen(big(r.ref), big(r.step), length(r), r.offset)
 broadcasted(::DefaultArrayStyle{1}, ::typeof(big), r::LinRange) = LinRange(big(r.start), big(r.stop), length(r))
-
-
-"""
-    broadcast_getindex(A, inds...)
-
-Equivalent to [`broadcast`](@ref)ing the `inds` arrays to a common size
-and returning an array `[A[ks...] for ks in zip(indsb...)]` (where `indsb`
-would be the broadcast `inds`). The shape of the output is equal to the shape of each
-element of `indsb`.
-
-# Examples
-```jldoctest bc_getindex
-julia> A = [11 12; 21 22]
-2×2 Array{Int64,2}:
- 11  12
- 21  22
-
-julia> A[1:2, 1:2]
-2×2 Array{Int64,2}:
- 11  12
- 21  22
-
-julia> broadcast_getindex(A, 1:2, 1:2)
-2-element Array{Int64,1}:
- 11
- 22
-
-julia> A[1:2, 2:-1:1]
-2×2 Array{Int64,2}:
- 12  11
- 22  21
-
-julia> broadcast_getindex(A, 1:2, 2:-1:1)
-2-element Array{Int64,1}:
- 12
- 21
-```
-Because the indices are all vectors, these calls are like `[A[i[k], j[k]] for k = 1:2]`
-where `i` and `j` are the two index vectors.
-
-```jldoctest bc_getindex
-julia> broadcast_getindex(A, 1:2, (1:2)')
-2×2 Array{Int64,2}:
- 11  12
- 21  22
-
-julia> broadcast_getindex(A, (1:2)', 1:2)
-2×2 Array{Int64,2}:
- 11  21
- 12  22
-
-julia> broadcast_getindex(A, [1 2 1; 1 2 2], [1, 2])
-2×3 Array{Int64,2}:
- 11  21  11
- 12  22  22
-```
-"""
-broadcast_getindex(src::AbstractArray, I::AbstractArray...) =
-    broadcast_getindex!(Base.similar(Array{eltype(src)}, combine_axes(I...)), src, I...)
-
-@generated function broadcast_getindex!(dest::AbstractArray, src::AbstractArray, I::AbstractArray...)
-    N = length(I)
-    Isplat = Expr[:(I[$d]) for d = 1:N]
-    quote
-        @nexprs $N d->(I_d = I[d])
-        check_broadcast_axes(Base.axes(dest), $(Isplat...))  # unnecessary if this function is never called directly
-        checkbounds(src, $(Isplat...))
-        @nexprs $N d->(@nexprs $N k->(Ibcast_d_k = Base.axes(I_k, d) == OneTo(1)))
-        @nloops $N i dest d->(@nexprs $N k->(j_d_k = Ibcast_d_k ? 1 : i_d)) begin
-            @nexprs $N k->(@inbounds J_k = @nref $N I_k d->j_d_k)
-            @inbounds (@nref $N dest i) = (@nref $N src J)
-        end
-        dest
-    end
-end
-
-"""
-    broadcast_setindex!(A, X, inds...)
-
-Efficient element-by-element setting of the values of `A` in a pattern established by `inds`.
-Equivalent to broadcasting the `X` and `inds` arrays to a common size, and then executing
-
-    for (is, js) in zip(zip(indsb), eachindex(Xb))
-        A[is...] = Xb[js...]
-    end
-
-where `Xb` and `indsb` are the broadcast `X` and `inds`.
-
-See [`broadcast_getindex`](@ref) for examples of the treatment of `inds`.
-"""
-@generated function broadcast_setindex!(A::AbstractArray, x, I::AbstractArray...)
-    N = length(I)
-    Isplat = Expr[:(I[$d]) for d = 1:N]
-    quote
-        @nexprs $N d->(I_d = I[d])
-        checkbounds(A, $(Isplat...))
-        shape = combine_axes($(Isplat...))
-        @nextract $N shape d->(length(shape) < d ? OneTo(1) : shape[d])
-        @nexprs $N d->(@nexprs $N k->(Ibcast_d_k = Base.axes(I_k, d) == 1:1))
-        if !isa(x, AbstractArray)
-            xA = convert(eltype(A), x)
-            @nloops $N i d->shape_d d->(@nexprs $N k->(j_d_k = Ibcast_d_k ? 1 : i_d)) begin
-                @nexprs $N k->(@inbounds J_k = @nref $N I_k d->j_d_k)
-                @inbounds (@nref $N A J) = xA
-            end
-        else
-            X = x
-            @nexprs $N d->(shapelen_d = length(shape_d))
-            @ncall $N Base.setindex_shape_check X shapelen
-            Xstate = start(X)
-            @inbounds @nloops $N i d->shape_d d->(@nexprs $N k->(j_d_k = Ibcast_d_k ? 1 : i_d)) begin
-                @nexprs $N k->(J_k = @nref $N I_k d->j_d_k)
-                x_el, Xstate = next(X, Xstate)
-                (@nref $N A J) = x_el
-            end
-        end
-        A
-    end
-end
 
 ## In specific instances, we can broadcast masked BitArrays whole chunks at a time
 # Very intentionally do not support much functionality here: scalar indexing would be O(n)

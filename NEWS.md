@@ -469,6 +469,9 @@ This section lists changes that do not have deprecation warnings.
   * `widen` on 8- and 16-bit integer types now widens to the platform word size (`Int`)
     instead of to a 32-bit type ([#26859]).
 
+  * `mv`,`cp`, `touch`, `mkdir`, `mkpath` now return the path that was created/modified
+    rather than `nothing` ([#27071]).
+
 Library improvements
 --------------------
 
@@ -477,6 +480,9 @@ Library improvements
 
   * `Char` is now a subtype of `AbstractChar`, and most of the functions that
     take character arguments now accept any `AbstractChar` ([#26286]).
+
+  * `bytes2hex` now accepts an optional `io` argument to output to a hexadecimal stream
+    without allocating a `String` first ([#27121]).
 
   * `String(array)` now accepts an arbitrary `AbstractVector{UInt8}`. For `Vector`
     inputs, it "steals" the memory buffer, leaving them with an empty buffer which
@@ -634,8 +640,10 @@ Library improvements
       other containers, by taking the multiplicity of the arguments into account.
       Use `unique` to get the old behavior.
 
-  * The type `LinearIndices` has been added, providing conversion from
-    cartesian indices to linear indices using the normal indexing operation. ([#24715])
+  * The `linearindices` function has been deprecated in favor of the new
+    `LinearIndices` type, which additionnally provides conversion from
+    cartesian indices to linear indices using the normal indexing operation.
+    ([#24715], [#26775]).
 
   * `IdDict{K,V}` replaces `ObjectIdDict`.  It has type parameters
     like other `AbstractDict` subtypes and its constructors mirror the
@@ -663,9 +671,6 @@ Compiler/Runtime improvements
 
   * Inference now propagates constants inter-procedurally, and can compute
     various constants expressions at compile-time ([#24362]).
-
-  * The LLVM SLP Vectorizer optimization pass is now enabled at the default
-    optimization level.
 
 Deprecated or removed
 ---------------------
@@ -711,6 +716,9 @@ Deprecated or removed
     "scalar"-like values across many locations—is now deprecated in favor of explicitly
     using the broadcasted assignment syntax `A[I...] .= x` or `fill!(view(A, I...), x)`
     ([#26347]).
+
+  * `broadcast_getindex(A, I...)` and `broadcast_setindex!(A, v, I...)` are deprecated in
+    favor of `getindex.((A,), I...)` and `setindex!.((A,), v, I...)`, respectively ([#27075]).
 
   * `LinAlg.fillslots!` has been renamed `LinAlg.fillstored!` ([#25030]).
 
@@ -975,6 +983,9 @@ Deprecated or removed
     been deprecated due to inconsistency with linear algebra. Use `.+` and `.-` for these operations
     instead ([#22880], [#22932]).
 
+  * `flipbits!(B)` is deprecated in favor of using in-place broadcast to negate each element:
+    `B .= .!B` ([#27067]).
+
   * `isleaftype` is deprecated in favor of the simpler predicates `isconcretetype` and `isdispatchtuple`.
     Concrete types are those that might equal `typeof(x)` for some `x`;
     `isleaftype` included some types for which this is not true. Those are now categorized more precisely
@@ -1040,6 +1051,8 @@ Deprecated or removed
     [KahanSummation](https://github.com/JuliaMath/KahanSummation.jl) package ([#24869]).
 
   * `isnumber` has been renamed to `isnumeric` ([#25021]).
+
+  * `isalpha` has been renamed to `isletter` ([#26932]).
 
   * `is_assigned_char` and `normalize_string` have been renamed to `isassigned` and
     `normalize`, and moved to the new `Unicode` standard library module.
@@ -1488,3 +1501,5 @@ Command-line option changes
 [#26442]: https://github.com/JuliaLang/julia/issues/26442
 [#26600]: https://github.com/JuliaLang/julia/issues/26600
 [#26670]: https://github.com/JuliaLang/julia/issues/26670
+[#26775]: https://github.com/JuliaLang/julia/issues/26775
+[#26932]: https://github.com/JuliaLang/julia/issues/26932

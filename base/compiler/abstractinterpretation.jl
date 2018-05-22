@@ -379,25 +379,28 @@ end
 # simulate iteration protocol on container type up to fixpoint
 function abstract_iteration(@nospecialize(itertype), vtypes::VarTable, sv::InferenceState)
     tm = _topmod(sv)
-    if !isdefined(tm, :start) || !isdefined(tm, :next) || !isconst(tm, :start) || !isconst(tm, :next)
+    if !isdefined(tm, :iterate) || !isconst(tm, :iterate)
         return Vararg{Any}
     end
-    startf = getfield(tm, :start)
-    nextf = getfield(tm, :next)
-    statetype = abstract_call(startf, (), Any[Const(startf), itertype], vtypes, sv)
-    statetype === Bottom && return Bottom
-    valtype = Bottom
+    iteratef = getfield(tm, :iterate)
+    stateordonet = abstract_call(iteratef, (), Any[Const(iteratef), itertype], vtypes, sv)
+    # Return Bottom if this is not an iterator.
+    # WARNING: Changes to the iteration protocol must be reflected here,
+    # this is not just an optimization.
+    stateordonet === Bottom && return Bottom
+    valtype = statetype = Bottom
     while valtype !== Any
-        nt = abstract_call(nextf, (), Any[Const(nextf), itertype, statetype], vtypes, sv)
-        nt = widenconst(nt)
-        if !isa(nt, DataType) || !(nt <: Tuple) || isvatuple(nt) || length(nt.parameters) != 2
+        stateordonet = widenconst(stateordonet)
+        nounion = Nothing <: stateordonet ? typesubtract(stateordonet, Nothing) : stateordonet
+        if !isa(nounion, DataType) || !(nounion <: Tuple) || isvatuple(nounion) || length(nounion.parameters) != 2
             return Vararg{Any}
         end
-        if nt.parameters[1] <: valtype && nt.parameters[2] <: statetype
+        if nounion.parameters[1] <: valtype && nounion.parameters[2] <: statetype
             break
         end
-        valtype = tmerge(valtype, nt.parameters[1])
-        statetype = tmerge(statetype, nt.parameters[2])
+        valtype = tmerge(valtype, nounion.parameters[1])
+        statetype = tmerge(statetype, nounion.parameters[2])
+        stateordonet = abstract_call(iteratef, (), Any[Const(iteratef), itertype, statetype], vtypes, sv)
     end
     return Vararg{valtype}
 end
@@ -500,6 +503,18 @@ function abstract_call(@nospecialize(f), fargs::Union{Tuple{},Vector{Any}}, argt
 
     tm = _topmod(sv)
     if isa(f, Builtin) || isa(f, IntrinsicFunction)
+        if f === ifelse && fargs isa Vector{Any} && length(argtypes) == 4 && argtypes[2] isa Conditional
+            cnd = argtypes[2]
+            tx = argtypes[3]
+            ty = argtypes[4]
+            if isa(fargs[3], Slot) && slot_id(cnd.var) == slot_id(fargs[3])
+                tx = typeintersect(tx, cnd.vtype)
+            end
+            if isa(fargs[4], Slot) && slot_id(cnd.var) == slot_id(fargs[4])
+                ty = typeintersect(ty, cnd.elsetype)
+            end
+            return tmerge(tx, ty)
+        end
         rt = builtin_tfunction(f, argtypes[2:end], sv)
         if f === getfield && isa(fargs, Vector{Any}) && length(argtypes) == 3 && isa(argtypes[3], Const) && isa(argtypes[3].val, Int) && argtypes[2] ⊑ Tuple
             cti = precise_container_type(fargs[2], argtypes[2], vtypes, sv)

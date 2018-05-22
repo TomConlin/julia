@@ -111,8 +111,13 @@ void addOptimizationPasses(legacy::PassManagerBase *PM, int opt_level, bool dump
 #if defined(JL_MSAN_ENABLED)
     PM->add(llvm::createMemorySanitizerPass(true));
 #endif
-    if (opt_level == 0) {
+    if (opt_level < 2) {
         PM->add(createCFGSimplificationPass()); // Clean up disgusting code
+        if (opt_level == 1) {
+            PM->add(createSROAPass());                 // Break up aggregate allocas
+            PM->add(createInstructionCombiningPass()); // Cleanup for scalarrepl.
+            PM->add(createEarlyCSEPass());
+        }
 #if JL_LLVM_VERSION < 50000
         PM->add(createBarrierNoopPass());
         PM->add(createLowerExcHandlersPass());
@@ -176,14 +181,14 @@ void addOptimizationPasses(legacy::PassManagerBase *PM, int opt_level, bool dump
     PM->add(createAllocOptPass());
 #endif
     PM->add(createInstructionCombiningPass()); // Cleanup for scalarrepl.
+    // Now that SROA has cleaned up for front-end mess, a lot of control flow should
+    // be more evident - try to clean it up.
+    PM->add(createCFGSimplificationPass());    // Merge & remove BBs
     if (dump_native)
         PM->add(createMultiVersioningPass());
     PM->add(createSROAPass());                 // Break up aggregate allocas
     PM->add(createInstructionCombiningPass()); // Cleanup for scalarrepl.
     PM->add(createJumpThreadingPass());        // Thread jumps.
-    // NOTE: CFG simp passes after this point seem to hurt native codegen.
-    // See issue #6112. Should be re-evaluated when we switch to MCJIT.
-    //PM->add(createCFGSimplificationPass());    // Merge & remove BBs
     PM->add(createInstructionCombiningPass()); // Combine silly seq's
 
     //PM->add(createCFGSimplificationPass());    // Merge & remove BBs
@@ -252,9 +257,14 @@ void addOptimizationPasses(legacy::PassManagerBase *PM, int opt_level, bool dump
     PM->add(createLoopIdiomPass());
     PM->add(createLoopDeletionPass());          // Delete dead loops
     PM->add(createJumpThreadingPass());         // Thread jumps
-    PM->add(createSLPVectorizerPass());         // Vectorize straight-line code
+
+    if (opt_level >= 3) {
+        PM->add(createSLPVectorizerPass());     // Vectorize straight-line code
+    }
+
     PM->add(createAggressiveDCEPass());         // Delete dead instructions
-    PM->add(createInstructionCombiningPass());  // Clean up after SLP loop vectorizer
+    if (opt_level >= 3)
+        PM->add(createInstructionCombiningPass());   // Clean up after SLP loop vectorizer
     PM->add(createLoopVectorizePass());         // Vectorize loops
     PM->add(createInstructionCombiningPass());  // Clean up after loop vectorizer
     // LowerPTLS removes an indirect call. As a result, it is likely to trigger
