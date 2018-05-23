@@ -12,7 +12,7 @@ let nextidx = 0
     end
 end
 
-spawnat(p, thunk) = sync_add(remotecall(thunk, p))
+spawnat(p, thunk) = remotecall(thunk, p)
 
 spawn_somewhere(thunk) = spawnat(nextproc(),thunk)
 
@@ -41,7 +41,14 @@ julia> fetch(f)
 """
 macro spawn(expr)
     thunk = esc(:(()->($expr)))
-    :(spawn_somewhere($thunk))
+    var = esc(Base.sync_varname)
+    quote
+        local ref = spawn_somewhere($thunk)
+        if $(Expr(:isdefined, var))
+            push!($var, ref)
+        end
+        ref
+    end
 end
 
 """
@@ -64,7 +71,14 @@ julia> fetch(f)
 """
 macro spawnat(p, expr)
     thunk = esc(:(()->($expr)))
-    :(spawnat($(esc(p)), $thunk))
+    var = esc(Base.sync_varname)
+    quote
+        local ref = spawnat($(esc(p)), $thunk)
+        if $(Expr(:isdefined, var))
+            push!($var, ref)
+        end
+        ref
+    end
 end
 
 """
@@ -292,7 +306,9 @@ function preducellt(reducer, f, R)
     reduce(reducer, [wait(t) for t in w_exec])
 end
 function pfor(f, R)
-    [@spawn f(R, first(c), last(c)) for c in splitrange(length(R), nworkers())]
+    @async @sync for c in splitrange(length(R), nworkers())
+        @spawn f(R, first(c), last(c))
+    end
 end
 
 function pforlt(f, R)
@@ -362,11 +378,17 @@ macro distributed(args...)
     r = loop.args[1].args[2]
     body = loop.args[2]
     if na==1
-        thecall = :(pfor($(make_pfor_body(var, body)), $(esc(r))))
+        syncvar = esc(Base.sync_varname)
+        return quote
+            local ref = pfor($(make_pfor_body(var, body)), $(esc(r)))
+            if $(Expr(:isdefined, syncvar))
+                push!($syncvar, ref)
+            end
+            ref
+        end
     else
-        thecall = :(preduce($(esc(reducer)), $(make_preduce_body(var, body)), $(esc(r))))
+        return :(preduce($(esc(reducer)), $(make_preduce_body(var, body)), $(esc(r))))
     end
-    thecall
 end
 
 macro parallelLT(args...)
