@@ -6,7 +6,7 @@ using Test, LinearAlgebra, SparseArrays, Random
 using LinearAlgebra: rmul!
 
 n= 10 #Size of matrix to test
-srand(1)
+Random.seed!(1)
 
 @testset "Interconversion between special matrix types" begin
     a = [1.0:n;]
@@ -116,10 +116,10 @@ end
         a = rand(n,n)
         atri = typ(a)
         b = rand(n,n)
-        qrb = qrfact(b,Val(true))
+        qrb = qr(b,Val(true))
         @test *(atri, adjoint(qrb.Q)) ≈ Matrix(atri) * qrb.Q'
         @test rmul!(copy(atri), adjoint(qrb.Q)) ≈ Matrix(atri) * qrb.Q'
-        qrb = qrfact(b,Val(false))
+        qrb = qr(b,Val(false))
         @test *(atri, adjoint(qrb.Q)) ≈ Matrix(atri) * qrb.Q'
         @test rmul!(copy(atri), adjoint(qrb.Q)) ≈ Matrix(atri) * qrb.Q'
     end
