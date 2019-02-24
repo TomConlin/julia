@@ -4,7 +4,7 @@
 
 if Sys.iswindows()
     function download(url::AbstractString, filename::AbstractString)
-        ps = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        ps = joinpath(get(ENV, "SYSTEMROOT", "C:\\Windows"), "System32\\WindowsPowerShell\\v1.0\\powershell.exe")
         tls12 = "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12"
         client = "New-Object System.Net.Webclient"
         # in the following we escape ' with '' (see https://ss64.com/ps/syntax-esc.html)
@@ -23,7 +23,9 @@ if Sys.iswindows()
     end
 else
     function download(url::AbstractString, filename::AbstractString)
-        if Sys.which("curl") !== nothing
+        if Sys.isapple() && Sys.isexecutable("/usr/bin/curl")
+            run(`/usr/bin/curl -g -L -f -o $filename $url`) # issue #30956
+        elseif Sys.which("curl") !== nothing
             run(`curl -g -L -f -o $filename $url`)
         elseif Sys.which("wget") !== nothing
             try

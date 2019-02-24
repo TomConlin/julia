@@ -148,6 +148,8 @@ static inline jl_array_t *_new_array(jl_value_t *atype, uint32_t ndims, size_t *
 {
     jl_value_t *eltype = jl_tparam0(atype);
     size_t elsz = 0, al = 0;
+    if (!jl_is_kind(jl_typeof(eltype)))
+        jl_type_error_rt("Array", "element type", (jl_value_t*)jl_type_type, eltype);
     int isunboxed = jl_islayout_inline(eltype, &elsz, &al);
     int isunion = jl_is_uniontype(eltype);
     if (!isunboxed) {
@@ -467,7 +469,10 @@ JL_DLLEXPORT jl_value_t *jl_array_to_string(jl_array_t *a)
 
 JL_DLLEXPORT jl_value_t *jl_pchar_to_string(const char *str, size_t len)
 {
-    jl_value_t *s = jl_gc_alloc(jl_get_ptls_states(), sizeof(size_t)+len+1, jl_string_type);
+    size_t sz = sizeof(size_t) + len + 1; // add space for trailing \nul protector and size
+    if (len == 0)
+        return jl_an_empty_string;
+    jl_value_t *s = jl_gc_alloc_(jl_get_ptls_states(), sz, jl_string_type); // force inlining
     *(size_t*)s = len;
     memcpy((char*)s + sizeof(size_t), str, len);
     ((char*)s + sizeof(size_t))[len] = 0;
@@ -476,7 +481,10 @@ JL_DLLEXPORT jl_value_t *jl_pchar_to_string(const char *str, size_t len)
 
 JL_DLLEXPORT jl_value_t *jl_alloc_string(size_t len)
 {
-    jl_value_t *s = jl_gc_alloc(jl_get_ptls_states(), sizeof(size_t)+len+1, jl_string_type);
+    size_t sz = sizeof(size_t) + len + 1; // add space for trailing \nul protector and size
+    if (len == 0)
+        return jl_an_empty_string;
+    jl_value_t *s = jl_gc_alloc_(jl_get_ptls_states(), sz, jl_string_type); // force inlining
     *(size_t*)s = len;
     ((char*)s + sizeof(size_t))[len] = 0;
     return s;
@@ -939,7 +947,7 @@ STATIC_INLINE void jl_array_shrink(jl_array_t *a, size_t dec)
         char *typetagdata;
         char *newtypetagdata;
         if (isbitsunion) {
-            typetagdata = malloc(a->nrows);
+            typetagdata = (char*)malloc(a->nrows);
             memcpy(typetagdata, jl_array_typetagdata(a), a->nrows);
         }
         size_t oldoffsnb = a->offset * elsz;

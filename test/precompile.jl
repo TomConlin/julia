@@ -359,12 +359,12 @@ try
           error("break me")
           end
           """)
-    @test_warn "ERROR: LoadError: break me\nStacktrace:\n [1] error" try
+    @test_warn r"ERROR: Error while loading expression starting at.*FooBar2.*caused by.*break me"s try
         Base.require(Main, :FooBar2)
         error("\"LoadError: break me\" test failed")
     catch exc
-        isa(exc, ErrorException) || rethrow(exc)
-        occursin("ERROR: LoadError: break me", exc.msg) && rethrow(exc)
+        isa(exc, ErrorException) || rethrow()
+        occursin("ERROR: LoadError: break me", exc.msg) && rethrow()
     end
 
     # Test transitive dependency for #21266
@@ -744,5 +744,27 @@ let
     end
 end
 
+# issue #29936
+let
+    load_path = mktempdir()
+    load_cache_path = mktempdir()
+    try
+        write(joinpath(load_path, "Foo29936.jl"),
+              """
+              module Foo29936
+              const global m = Val{nothing}()
+              const global h = Val{:hey}()
+              wab = [("a", m), ("b", h),]
+              end
+              """)
+        pushfirst!(LOAD_PATH, load_path)
+        pushfirst!(DEPOT_PATH, load_cache_path)
+        @eval using Foo29936
+        @test [("Plan", Foo29936.m), ("Plan", Foo29936.h),] isa Vector{Tuple{String,Val}}
+    finally
+        rm(load_path, recursive=true)
+        rm(load_cache_path, recursive=true)
+    end
+end
 
 end # !withenv

@@ -821,9 +821,9 @@ void LateLowerGCFrame::NoteUse(State &S, BBState &BBS, Value *V, BitVector &Uses
     else if (isSpecialPtrVec(V->getType())) {
         std::vector<int> Nums = NumberVector(S, V);
         for (int Num : Nums) {
-            MaybeResize(BBS, Num);
             if (Num < 0)
                 continue;
+            MaybeResize(BBS, Num);
             Uses[Num] = 1;
         }
     }
@@ -1799,8 +1799,10 @@ bool LateLowerGCFrame::CleanupIR(Function &F, State *S) {
                 size_t nframeargs = nargs - (CC == JLCALL_F_CC);
                 SmallVector<Value *, 3> ReplacementArgs;
                 auto it = CI->arg_begin();
-                if (CC == JLCALL_F_CC)
+                if (CC == JLCALL_F_CC) {
+                    assert(it != CI->arg_end());
                     ReplacementArgs.push_back(*(it++));
+                }
                 maxframeargs = std::max(maxframeargs, nframeargs);
                 int slot = 0;
                 IRBuilder<> Builder (CI);

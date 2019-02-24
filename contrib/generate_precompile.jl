@@ -81,26 +81,27 @@ function generate_precompile_statements()
             # Fake being cygwin
             pipename = """\\\\?\\pipe\\cygwin-$("0"^16)-pty10-abcdef"""
             server = listen(pipename)
-            slave = connect(pipename)
-            @assert ccall(:jl_ispty, Cint, (Ptr{Cvoid},), slave.handle) == 1
-            master = accept(server)
+            pty_slave = connect(pipename)
+            @assert ccall(:jl_ispty, Cint, (Ptr{Cvoid},), pty_slave.handle) == 1
+            pty_master = accept(server)
         else
-            slave, master = open_fake_pty()
+            pty_slave, pty_master = open_fake_pty()
         end
         done = false
-        withenv("JULIA_HISTORY" => tempname(), "JULIA_PROJECT" => nothing,
+        blackhole = Sys.isunix() ? "/dev/null" : "nul"
+        withenv("JULIA_HISTORY" => blackhole, "JULIA_PROJECT" => nothing,
                 "TERM" => "") do
             if have_repl
                 p = run(`$(julia_cmd()) -O0 --trace-compile=$precompile_file --sysimage $sysimg
                         --compile=all --startup-file=no --color=yes
                         -e 'import REPL; REPL.Terminals.is_precompiling[] = true'
                         -i`,
-                        slave, slave, slave; wait=false)
-                readuntil(master, "julia>", keep=true)
+                        pty_slave, pty_slave, pty_slave; wait=false)
+                readuntil(pty_master, "julia>", keep=true)
                 t = @async begin
                     while true
                         sleep(0.5)
-                        s = String(readavailable(master))
+                        s = String(readavailable(pty_master))
                         write(repl_output_buffer, s)
                         if occursin("__PRECOMPILE_END__", s)
                             break
@@ -109,18 +110,18 @@ function generate_precompile_statements()
                 end
                 if have_repl
                     for l in split(precompile_script, '\n'; keepempty=false)
-                        write(master, l, '\n')
+                        write(pty_master, l, '\n')
                     end
                 end
-                write(master, "print(\"__PRECOMPILE\", \"_END__\")", '\n')
+                write(pty_master, "print(\"__PRECOMPILE\", \"_END__\")", '\n')
                 wait(t)
 
                 # TODO Figure out why exit() on Windows doesn't exit the process
                 if Sys.iswindows()
-                    print(master, "ccall(:_exit, Cvoid, (Cint,), 0)\n")
+                    print(pty_master, "ccall(:_exit, Cvoid, (Cint,), 0)\n")
                 else
-                    write(master, "exit()\n")
-                    readuntil(master, "exit()\r\e[13C\r\n")
+                    write(pty_master, "exit()\n")
+                    readuntil(pty_master, "exit()\r\e[13C\r\n")
                     # @assert bytesavailable(master) == 0
                 end
                 wait(p)
@@ -131,7 +132,7 @@ function generate_precompile_statements()
                         -e0`)
             end
         end
-        close(master)
+        close(pty_master)
 
         # Check what the REPL displayed
         # repl_output = String(take!(repl_output_buffer))
@@ -163,11 +164,12 @@ function generate_precompile_statements()
             # println(statement)
             # Work around #28808
             occursin("\"YYYY-mm-dd\\THH:MM:SS\"", statement) && continue
+            statement == "precompile(Tuple{typeof(Base.show), Base.IOContext{Base.TTY}, Type{Vararg{Any, N} where N}})" && continue
             try
                 Base.include_string(PrecompileStagingArea, statement)
-            catch ex
+            catch
                 @error "Failed to precompile $statement"
-                rethrow(ex)
+                rethrow()
             end
         end
         print(" $(length(statements)) generated in ")

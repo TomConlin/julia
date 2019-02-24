@@ -192,6 +192,8 @@ function wait(t::Task)
     end
 end
 
+fetch(@nospecialize x) = x
+
 """
     fetch(t::Task)
 
@@ -211,9 +213,9 @@ function sync_end(refs)
     for r in refs
         try
             wait(r)
-        catch ex
+        catch
             if !isa(r, Task) || (isa(r, Task) && !istaskfailed(r))
-                rethrow(ex)
+                rethrow()
             end
         finally
             if isa(r, Task) && istaskfailed(r)
@@ -316,7 +318,7 @@ function task_done_hook(t::Task)
             active_repl_backend.in_eval
             throwto(active_repl_backend.backend_task, e)
         else
-            rethrow(e)
+            rethrow()
         end
     end
 end

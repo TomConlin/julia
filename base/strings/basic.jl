@@ -142,8 +142,8 @@ eltype(::Type{<:AbstractString}) = Char # some string types may use another Abst
 """
     sizeof(str::AbstractString)
 
-Size, in bytes, of the string `s`. Equal to the number of code units in `s` multiplied by
-the size, in bytes, of one code unit in `s`.
+Size, in bytes, of the string `str`. Equal to the number of code units in `str` multiplied by
+the size, in bytes, of one code unit in `str`.
 
 # Examples
 ```jldoctest
@@ -203,6 +203,7 @@ string(s::AbstractString) = s
 (::Type{Vector{T}})(s::AbstractString) where {T<:AbstractChar} = collect(T, s)
 
 Symbol(s::AbstractString) = Symbol(String(s))
+Symbol(x...) = Symbol(string(x...))
 
 convert(::Type{T}, s::T) where {T<:AbstractString} = s
 convert(::Type{T}, s::AbstractString) where {T<:AbstractString} = T(s)
@@ -570,8 +571,7 @@ function map(f, s::AbstractString)
     for c in s
         c′ = f(c)
         isa(c′, AbstractChar) || throw(ArgumentError(
-            "map(f, s::AbstractString) requires f to return AbstractChar; " *
-            "try map(f, collect(s)) or a comprehension instead"))
+            "map(f, s::AbstractString) requires f to return AbstractChar; try map(f, collect(s)) or a comprehension instead"))
         write(out, c′::AbstractChar)
     end
     String(take!(out))
@@ -603,7 +603,7 @@ julia> first("∀ϵ≠0: ϵ²>0", 3)
 "∀ϵ≠"
 ```
 """
-first(s::AbstractString, n::Integer) = s[1:min(end, nextind(s, 0, n))]
+first(s::AbstractString, n::Integer) = @inbounds s[1:min(end, nextind(s, 0, n))]
 
 """
     last(s::AbstractString, n::Integer)
@@ -621,7 +621,7 @@ julia> last("∀ϵ≠0: ϵ²>0", 3)
 "²>0"
 ```
 """
-last(s::AbstractString, n::Integer) = s[max(1, prevind(s, ncodeunits(s)+1, n)):end]
+last(s::AbstractString, n::Integer) = @inbounds s[max(1, prevind(s, ncodeunits(s)+1, n)):end]
 
 """
     reverseind(v, i)
@@ -693,7 +693,6 @@ end
 length(s::CodeUnits) = ncodeunits(s.s)
 sizeof(s::CodeUnits{T}) where {T} = ncodeunits(s.s) * sizeof(T)
 size(s::CodeUnits) = (length(s),)
-strides(s::CodeUnits) = (1,)
 elsize(s::CodeUnits{T}) where {T} = sizeof(T)
 @propagate_inbounds getindex(s::CodeUnits, i::Int) = codeunit(s.s, i)
 IndexStyle(::Type{<:CodeUnits}) = IndexLinear()
